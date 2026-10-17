@@ -26,6 +26,11 @@ RU_LISTS = {
 }
 
 
+def wake_clock():
+    # CLOCK_MONOTONIC excludes suspend on Linux; BOOTTIME includes it.
+    return time.clock_gettime(time.CLOCK_BOOTTIME)
+
+
 class Controller:
     def __init__(self, store, runtime):
         self.store, self.runtime = store, runtime
@@ -33,7 +38,7 @@ class Controller:
         self.events = deque(maxlen=100)
         self.last_error = ""
         self.retry_at = 0
-        self.last_tick = time.monotonic()
+        self.last_tick = wake_clock()
         self.net = ""
         self.last_network_check = 0
         for key, (name, url) in RU_LISTS.items():
@@ -84,6 +89,7 @@ class Controller:
         data = download(item["url"]) if content is None else content.encode()
         directory = self.store.directory / "lists"
         directory.mkdir(mode=0o755, exist_ok=True)
+        os.chmod(directory, 0o755)  # daemon umask is 077; engine must traverse
         tmp = directory / (identifier() + ".json")
         try:
             if item.get("format") == "srs":
@@ -299,7 +305,7 @@ class Controller:
         with self.lock:
             now = time.time()
             current = self.runtime.status()
-            mono = time.monotonic()
+            mono = wake_clock()
             # A suspend gap or physical route change restarts just the selected
             # mechanism. The guard stays in place throughout recovery.
             changed = False

@@ -85,12 +85,14 @@ class Runtime:
         script = ("delete table inet helmsman_guard\n" if exists else "") + firewall_script(self.uid, lan)
         run(["nft", "-f", "-"], input=script)
         self.guard = True
+        atomic_json(self.directory.parent / "guard.json", {"armed": True, "lan": bool(lan)})
 
     def clear_guard(self):
         exists = run(["nft", "list", "table", "inet", "helmsman_guard"], check=False).returncode == 0
         if exists:
             run(["nft", "delete", "table", "inet", "helmsman_guard"])
         self.guard = False
+        atomic_json(self.directory.parent / "guard.json", {"armed": False, "lan": False})
 
     def cleanup_routes(self):
         # Reserved exclusively by this application, documented for recovery.

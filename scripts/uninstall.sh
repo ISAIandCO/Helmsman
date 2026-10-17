@@ -17,6 +17,7 @@ fi
 systemctl disable --now helmsman.service helmsman-guard.service 2>/dev/null || true
 # Emergency cleanup also works if the service binary/config was damaged.
 if nft list table inet helmsman_guard &>/dev/null; then nft delete table inet helmsman_guard; fi
+rm -f /var/lib/helmsman/guard.json
 for family in -4 -6; do
   for pref in {31800..31811}; do ip "$family" rule del pref "$pref" 2>/dev/null || true; done
   ip "$family" route flush table 31800 2>/dev/null || true

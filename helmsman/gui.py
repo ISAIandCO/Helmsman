@@ -152,21 +152,21 @@ class Window(QMainWindow):
     def build_connection(self):
         l = self.page("Подключение")
         title = QLabel("Helmsman")
-        title.setFont(QFont("", 27, QFont.Bold))
+        title.setFont(QFont("DejaVu Sans", 27, QFont.Bold))
         l.addWidget(title)
         self.state_label = QLabel("Ожидание сервиса…")
         self.state_label.setWordWrap(True)
-        self.state_label.setFont(QFont("", 15))
+        self.state_label.setFont(QFont("DejaVu Sans", 15))
         l.addWidget(self.state_label)
         self.profile_picker = QComboBox()
+        self.profile_picker.activated.connect(lambda _: self.mutate("select", {"profile_id": self.profile_picker.currentData()}))
         self.profile_picker.setAccessibleName("Выбранное подключение")
         l.addWidget(QLabel("Подключение"))
         l.addWidget(self.profile_picker)
-        button("Выбрать профиль", lambda: self.mutate("select", {"profile_id": self.profile_picker.currentData()}), l)
         self.preset_picker = combo(PRESETS)
+        self.preset_picker.activated.connect(lambda _: self.mutate("preset", {"preset": self.preset_picker.currentData()}))
         l.addWidget(QLabel("Маршрутизация"))
         l.addWidget(self.preset_picker)
-        button("Применить сценарий", lambda: self.mutate("preset", {"preset": self.preset_picker.currentData()}), l)
         row = QHBoxLayout()
         button("Подключить", lambda: self.mutate("connect", {"profile_id": self.profile_picker.currentData()}), row)
         button("Отключить", lambda: self.mutate("disconnect"), row)
@@ -367,7 +367,8 @@ class Window(QMainWindow):
         self.lists.setWordWrap(True)
         l.addWidget(self.lists)
         row = QHBoxLayout()
-        button("Добавить", self.add_list, row)
+        button("Добавить", lambda: self.add_list(), row)
+        button("Изменить", lambda: self.add_list(self.selected_item(self.lists, "lists")), row)
         button("Обновить выбранный", self.update_list, row)
         button("Удалить", lambda: self.delete_selected("list_delete", self.lists), row)
         l.addLayout(row)
@@ -376,12 +377,23 @@ class Window(QMainWindow):
         hint.setWordWrap(True)
         l.addWidget(hint)
 
-    def add_list(self):
-        name, url, content = line("Мой список"), line(), area()
+    def add_list(self, item=None):
+        item = item or {}
+        if item.get("id", "").startswith("ru-"):
+            QMessageBox.information(self, "Списки", "Для изменения встроенного списка создайте пользовательскую копию.")
+            return
+        existing = ""
+        if item.get("path") and not item.get("url"):
+            try:
+                existing = Path(item["path"]).read_text()
+            except OSError:
+                pass
+        name, url, content = line(item.get("name", "Мой список")), line(item.get("url", "")), area(existing)
         fmt = combo({"text": "Текст: домен или CIDR на строку", "source": "sing-box source JSON", "srs": "sing-box SRS по HTTPS"})
+        fmt.setCurrentIndex(fmt.findData("source" if existing else item.get("format", "text")))
         d = Form("Добавить список", {"name": ("Название", name), "url": ("HTTPS URL (необязательно)", url), "format": ("Формат", fmt), "content": ("Или содержимое списка", content)}, self)
         if d.exec() == QDialog.Accepted:
-            self.mutate("list_save", {"name": name.text(), "url": url.text(), "format": fmt.currentData(), **({"content": content.toPlainText()} if content.toPlainText().strip() else {})})
+            self.mutate("list_save", {"id": item.get("id"), "name": name.text(), "url": url.text(), "format": fmt.currentData(), **({"content": content.toPlainText()} if content.toPlainText().strip() else {})})
 
     def update_list(self):
         item = self.selected_item(self.lists, "lists")
@@ -473,7 +485,7 @@ class Window(QMainWindow):
 def theme(app):
     app.setApplicationName("Helmsman")
     app.setStyle("Fusion")
-    app.setFont(QFont("", 11))
+    app.setFont(QFont("DejaVu Sans", 11))
     app.setStyleSheet("QWidget { background: #111d2b; color: #eef4fc; } QPushButton, QComboBox, QLineEdit, QSpinBox { min-height: 36px; padding: 3px 9px; border: 1px solid #42617e; border-radius: 7px; } QPushButton { background: #254d72; } QPushButton:focus, QComboBox:focus { border: 2px solid #64cced; } QPushButton:hover { background: #326a96; } QListWidget, QPlainTextEdit { background: #17283a; border: 1px solid #34506a; padding: 7px; } QTabBar::tab { padding: 12px 9px; } QTabBar::tab:selected { background: #254d72; } QLabel { background: transparent; }")
 
 

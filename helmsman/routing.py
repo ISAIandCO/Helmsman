@@ -55,7 +55,11 @@ def source_list(obj):
         if not isinstance(r, dict) or not r or set(r) - LIST_FIELDS:
             raise UserError("Списки могут содержать только domain, domain_suffix и ip_cidr.")
         for k, values in r.items():
-            rule({"type": k, "values": values if isinstance(values, list) else [values]})
+            values = values if isinstance(values, list) else [values]
+            if not values or len(values) > 1000000:
+                raise UserError("Пустой или слишком большой список.")
+            for start in range(0, len(values), 10000):
+                rule({"type": k, "values": values[start:start + 10000]})
     return obj
 
 
@@ -93,8 +97,8 @@ def compile_config(state, profile, runtime, engine_uid, tun=True):
                 "outbounds": [{"type": "direct", "tag": "direct"}] + ([] if endpoint else [outbound]),
                 "endpoints": [outbound] if endpoint else [],
                 "dns": {"servers": [
-                    {"type": "udp", "tag": "bootstrap", "server": s["dns_direct"], "detour": "direct"},
-                    {"type": "https", "tag": "dns-direct", "server": s["dns_direct"], "detour": "direct"},
+                    {"type": "udp", "tag": "bootstrap", "server": s["dns_direct"]},
+                    {"type": "https", "tag": "dns-direct", "server": s["dns_direct"]},
                     {"type": "https", "tag": "dns-proxy", "server": s["dns_proxy"], "detour": "proxy"},
                     {"type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.0/15", "inet6_range": "fc00::/18"}],
                     "rules": [], "final": "dns-proxy", "strategy": "prefer_ipv4" if s["ipv6"] else "ipv4_only", "reverse_mapping": True},

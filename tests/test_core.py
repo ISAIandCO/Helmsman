@@ -154,6 +154,19 @@ class CoreTests(unittest.TestCase):
         compile_config(state, p, "/tmp", 999)
         self.assertEqual(state["rules"], original)
 
+    def test_large_public_list_and_failed_list_update(self):
+        from helmsman.routing import source_list
+        source_list({"version": 3, "rules": [{"domain_suffix": ["example.com"] * 15000}]})
+        with tempfile.TemporaryDirectory() as d:
+            c = Controller(Store(d), MemoryRuntime(d))
+            new = c.call("list_save", {"name": "test", "content": "example.com\n203.0.113.0/24", "format": "text"})
+            item = next(x for x in c.data["lists"] if x["id"] == new["id"])
+            old_path = item["path"]
+            with self.assertRaises(UserError):
+                c.call("list_save", {"id": item["id"], "name": "test", "content": "not a domain!", "format": "text"})
+            self.assertEqual(next(x for x in c.data["lists"] if x["id"] == new["id"])["path"], old_path)
+            self.assertEqual((Path(d) / "lists").stat().st_mode & 0o777, 0o755)
+
     def test_guard_no_physical_established_bypass(self):
         script = firewall_script(999, True)
         self.assertNotIn("ct state established", script)
@@ -161,6 +174,17 @@ class CoreTests(unittest.TestCase):
         self.assertIn("meta skuid 999 accept", script)
         self.assertLess(script.index("th dport 53 reject"), script.index("ip daddr"))
         self.assertNotIn("flush ruleset", script)
+
+    def test_boot_guard_recovers_damaged_state_conservatively(self):
+        from helmsman.boot_guard import policy
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(policy(d), (False, False))
+            (Path(d) / "guard.json").write_text('{"armed":true,"lan":true}')
+            self.assertEqual(policy(d), (True, True))
+            (Path(d) / "state.json").write_text("damaged")
+            self.assertEqual(policy(d), (True, True))
+            (Path(d) / "guard.json").write_text("damaged")
+            self.assertEqual(policy(d), (True, False))
 
     def test_gui_rpc_and_decky_use_same_controller(self):
         with tempfile.TemporaryDirectory() as d:

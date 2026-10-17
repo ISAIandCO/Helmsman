@@ -38,8 +38,23 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y libegl1 libxkbcommon0 libxcb-cursor0 nftables iproute2
           python -m pip install '.[gui,build]'
+      - uses: actions/cache/restore@v4
+        id: engines
+        with:
+          path: |
+            build/engines
+            build/sources
+          key: engines-ubuntu22-go1.26.8-${{ hashFiles('scripts/build-engines.py') }}
       - name: Build pinned network engines and vendor corresponding sources
+        if: steps.engines.outputs.cache-hit != 'true'
         run: python scripts/build-engines.py
+      - uses: actions/cache/save@v4
+        if: steps.engines.outputs.cache-hit != 'true'
+        with:
+          path: |
+            build/engines
+            build/sources
+          key: ${{ steps.engines.outputs.cache-primary-key }}
       - name: Build Decky companion
         working-directory: decky
         run: |

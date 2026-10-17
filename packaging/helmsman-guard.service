@@ -10,6 +10,11 @@ RequiresMountsFor=/var/lib/helmsman /var/lib/helmsman-app
 Type=oneshot
 ExecStart=/var/lib/helmsman-app/current/Helmsman guard
 RemainAfterExit=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/helmsman
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE
 
 [Install]
 WantedBy=sysinit.target
