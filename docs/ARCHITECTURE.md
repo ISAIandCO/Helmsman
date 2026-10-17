@@ -24,6 +24,8 @@
 - [Hiddify](https://github.com/hiddify/hiddify-app): ориентир для быстрого подключения и управления подписками, код интерфейса не копируется.
 - [AmneziaVPN](https://github.com/amnezia-vpn/amnezia-client): изучены importController/exportController, qCompress-кодировка vpn://, containers/last_config и экспорт native конфигураций.
 - [AmneziaWG documentation](https://docs.amnezia.org/documentation/amnezia-wg/): версии протокола и новые obfuscation-поля. Совпадение названий параметров не заменяет испытаний с сервером.
+- [NekoBox_SF RawUpdater](https://github.com/ISAIandCO/NekoBox_SF/blob/b5bea63e451e3a97ab17a024b9639a1c330ec443/app/src/main/java/io/nekohasekai/sagernet/group/RawUpdater.kt): проверены поля hwid/os/osVersion/model, семантика «только перечисленные», собственный User-Agent и приоритет дополнительных заголовков. Реализован тот же HTTP-контракт средствами Python standard library.
+- [Remnawave Response Rules](https://docs.rw/learn-en/routing-rules/): формат ответа зависит от User-Agent и других заголовков.
 - [Remnawave HWID](https://docs.rw/features/hwid-device-limit/): x-hwid, ограничения формата. Для иных провайдеров предусмотрена настройка заголовка/query.
 - [ZeroTier CLI](https://docs.zerotier.com/cli/), [client configuration](https://docs.zerotier.com/config/), исходники OneService.cpp: join-статусы и policy локальных маршрутов.
 - [Российские списки](https://github.com/runetfreedom/russia-v2ray-rules-dat): общественные источники, не утверждение о блокировке в конкретной сети.

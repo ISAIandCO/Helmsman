@@ -158,7 +158,7 @@ def uri(s):
             o["tls"] = t
         return profile(o, v.get("ps", ""))
     q = {k: v[-1] for k, v in parse_qs(u.query, keep_blank_values=True).items()}
-    known = {"security", "type", "sni", "peer", "alpn", "fp", "pbk", "sid", "spx", "flow", "encryption", "path", "host", "serviceName", "mode", "extra", "insecure", "allowInsecure", "obfs", "obfs-password", "upmbps", "downmbps", "auth", "protocol", "mport", "ports", "username", "password", "congestion_control", "udp_relay_mode"}
+    known = {"security", "type", "sni", "peer", "alpn", "fp", "pbk", "sid", "spx", "flow", "encryption", "path", "host", "serviceName", "mode", "extra", "insecure", "allowInsecure", "obfs", "obfs-password", "upmbps", "downmbps", "auth", "protocol", "mport", "ports", "username", "password", "congestion_control", "udp_relay_mode", "headerType", "packetEncoding"}
     if set(q) - known:
         raise UserError("Параметры ссылки требуют отдельной поддержки: " + ", ".join(sorted(set(q) - known)))
     t = {"hy2": "hysteria2", "ss": "shadowsocks", "socks5": "socks", "https": "http"}.get(u.scheme, u.scheme)
@@ -172,6 +172,12 @@ def uri(s):
             raise UserError("VLESS encryption не поддерживается основным движком.")
         if q.get("flow"):
             o["flow"] = q["flow"]
+        if q.get("headerType", "none") != "none":
+            raise UserError("TCP headerType: поддерживается только none.")
+        if q.get("packetEncoding"):
+            if q["packetEncoding"] not in {"xudp", "packetaddr"}:
+                raise UserError("Неподдерживаемый packetEncoding.")
+            o["packet_encoding"] = q["packetEncoding"]
         _transport(o, q)
     elif t == "shadowsocks":
         auth = unquote(u.username or "") + (":" + unquote(u.password) if u.password is not None else "")
@@ -209,7 +215,7 @@ def uri(s):
 
 def _transport(o, q):
     t = q.get("type", "tcp")
-    if t == "tcp":
+    if t in {"tcp", "raw"}:
         return
     if t not in {"ws", "grpc", "http", "httpupgrade", "quic", "xhttp", "splithttp"}:
         raise UserError("Транспорт " + t + " не поддерживается.")
@@ -463,6 +469,12 @@ def parse(text, depth=0):
                 items = items + obj["endpoints"]
             results = []
             for x in items:
+                if isinstance(x, dict) and ("outbounds" in x or "endpoints" in x):
+                    nested = parse(json.dumps(x), depth + 1)
+                    if len(nested) == 1 and x.get("remarks"):
+                        nested[0]["name"] = label(x["remarks"])
+                    results.extend(nested)
+                    continue
                 if x.get("type") in {"direct", "block", "dns", "selector", "urltest"} or x.get("protocol") in {"freedom", "blackhole", "dns"}:
                     continue
                 normalized = wireguard_json(x)

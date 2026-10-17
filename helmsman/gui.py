@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDia
 from .common import MAX_BYTES, PRESETS, UserError, VERSION
 from .dns import DNS_PRESETS, resolver_url
 from .rpc import call
+from .subscriptions import SUBSCRIPTION_AGENT
 from .warp import TERMS
 from .xray import is_xhttp
 
@@ -54,6 +55,7 @@ class Form(QDialog):
         page = QWidget()
         form = QFormLayout(page)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
         for key, (name, widget) in fields.items():
             widget.setAccessibleName(name)
             form.addRow(name, widget)
@@ -321,7 +323,10 @@ class Window(QMainWindow):
         button("Изменить", lambda: self.edit_subscription(self.selected_item(self.subscriptions, "subscriptions")), row)
         button("Удалить", lambda: self.delete_selected("subscription_delete", self.subscriptions), row)
         l.addLayout(row)
-        button("Обновить все подписки", lambda: self.mutate("subscriptions_update"), l)
+        row = QHBoxLayout()
+        button("Обновить выбранную", self.update_subscription, row)
+        button("Обновить все", lambda: self.mutate("subscriptions_update"), row)
+        l.addLayout(row)
         self.hwid = line()
         self.hwid.setAccessibleName("Общий HWID")
         l.addWidget(QLabel("Общий HWID: случайный идентификатор, без серийных номеров устройства"))
@@ -331,25 +336,44 @@ class Window(QMainWindow):
         button("Сгенерировать новый", lambda: self.mutate("hwid", {"value": ""}), row)
         l.addLayout(row)
 
+    def update_subscription(self):
+        sub = self.selected_item(self.subscriptions, "subscriptions")
+        if sub:
+            self.mutate("subscriptions_update", {"id": sub["id"]})
+
     def edit_subscription(self, sub=None):
         sub = sub or {}
         name = line(sub.get("name", "Подписка"))
         url = line(sub.get("url", ""), secret=True)
         interval = integer(sub.get("interval_hours", 24), 0, 720)
-        mode = combo({"none": "Не передавать", "remnawave": "Remnawave (x-hwid и описание устройства)", "header": "Указанный HTTP-заголовок", "query": "Указанный параметр URL"})
+        mode = combo({"none": "Не передавать", "remnawave": "HWID / NekoBox_SF / Remnawave", "header": "Указанный HTTP-заголовок", "query": "Указанный параметр URL"})
         mode.setCurrentIndex(mode.findData(sub.get("hwid_mode", "none")))
         hwid_name = line(sub.get("hwid_name", "x-hwid"))
         hwid = line(sub.get("hwid", ""))
+        hwid_params = area(sub.get("hwid_params", ""))
+        hwid_params.setPlaceholderText("hwid=ваш_id,os=Android,osVersion=16,model=ваша модель\nПусто — HWID и описание Steam Deck. Заполнено — только перечисленные поля.")
+        user_agent = line(sub.get("user_agent", SUBSCRIPTION_AGENT))
+        user_agent.setPlaceholderText("V2Ray: v2rayNG/1.10.5; JSON: sing-box/1.14.3")
         headers = area(json.dumps(sub.get("headers", {}), ensure_ascii=False, indent=2))
-        fields = {"name": ("Название", name), "url": ("HTTPS URL", url), "interval": ("Обновление, ч (0 — вручную)", interval), "mode": ("Передача HWID", mode), "hwid_name": ("Имя заголовка / query-параметра", hwid_name), "hwid": ("Свой HWID (пусто — общий)", hwid), "headers": ("Дополнительные HTTP-заголовки (JSON)", headers)}
+        def mode_changed():
+            hwid_name.setEnabled(mode.currentData() in {"header", "query"})
+            hwid.setEnabled(mode.currentData() != "none")
+            hwid_params.setEnabled(mode.currentData() == "remnawave")
+        mode.currentIndexChanged.connect(mode_changed)
+        mode_changed()
+        fields = {"name": ("Название", name), "url": ("HTTPS URL", url), "user_agent": ("User-Agent / формат ответа", user_agent), "interval": ("Обновление, ч (0 — вручную)", interval), "mode": ("Передача HWID", mode), "hwid_name": ("Имя заголовка / query-параметра", hwid_name), "hwid": ("Свой HWID (пусто — общий)", hwid), "hwid_params": ("Параметры как в NekoBox_SF", hwid_params), "headers": ("Дополнительные HTTP-заголовки (JSON)", headers)}
         d = Form("Подписка", fields, self)
+        d.findChild(QDialogButtonBox).button(QDialogButtonBox.Save).setText("Сохранить и обновить")
         if d.exec() == QDialog.Accepted:
             try:
                 extra = json.loads(headers.toPlainText())
             except ValueError:
                 QMessageBox.warning(self, "Подписка", "Заголовки должны быть JSON-объектом.")
                 return
-            self.mutate("subscription_save", {"id": sub.get("id"), "name": name.text(), "url": url.text(), "interval_hours": interval.value(), "hwid_mode": mode.currentData(), "hwid_name": hwid_name.text(), "hwid": hwid.text(), "headers": extra})
+            def saved(result):
+                self.refresh()
+                self.request("subscriptions_update", {"id": result["id"]}, lambda _: self.refresh())
+            self.request("subscription_save", {"id": sub.get("id"), "name": name.text(), "url": url.text(), "interval_hours": interval.value(), "hwid_mode": mode.currentData(), "hwid_name": hwid_name.text(), "hwid": hwid.text(), "hwid_params": hwid_params.toPlainText(), "user_agent": user_agent.text(), "headers": extra}, saved)
 
     def build_rules(self):
         l = self.page("Правила")

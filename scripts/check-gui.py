@@ -42,6 +42,28 @@ def warp_dialog():
 QTimer.singleShot(100, warp_dialog)
 w.generate_warp()
 print("PASS WARP native dialog and explicit consent")
+saved_requests = []
+original_request = w.request
+w.request = lambda method, params=None, callback=None, quiet=False: saved_requests.append((method, params))
+def subscription_dialog():
+    dialog = app.activeModalWidget()
+    fields = dialog.fields
+    fields['url'][1].setText('https://example.test/sub')
+    mode = fields['mode'][1]
+    mode.setCurrentIndex(mode.findData('remnawave'))
+    fields['hwid_params'][1].setPlainText('hwid=0123456789abcdef,os=Android,osVersion=16,model=Test Device')
+    fields['user_agent'][1].setText('v2rayNG/1.10.5')
+    assert fields['hwid_params'][1].isEnabled()
+    assert not fields['hwid_name'][1].isEnabled()
+    dialog.grab().save(str(out / 'desktop-subscription.png'))
+    dialog.accept()
+QTimer.singleShot(100, subscription_dialog)
+w.edit_subscription()
+assert saved_requests[0][0] == 'subscription_save'
+assert saved_requests[0][1]['hwid_params'].startswith('hwid=0123456789abcdef,')
+assert saved_requests[0][1]['user_agent'] == 'v2rayNG/1.10.5'
+w.request = original_request
+print('PASS native subscription editor saves NekoBox HWID parameters and User-Agent')
 for worker in list(w.workers):
     worker.wait(2000)
 assert w.tabs.count() == 7

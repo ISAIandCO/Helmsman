@@ -1,5 +1,7 @@
 """Actual HTTPS subscription requests, with a private test CA and local server."""
 import copy
+import base64
+import gzip
 import http.server
 import json
 import os
@@ -9,9 +11,12 @@ import tempfile
 import threading
 import unittest
 import urllib.request
+from unittest.mock import patch
 from pathlib import Path
 
-from helmsman.common import UserError, defaults
+from helmsman.common import Store, UserError, defaults
+from helmsman.daemon import Controller
+from test_core import MemoryRuntime
 from helmsman.subscriptions import SafeRedirect, download, update, validate_subscription
 
 LINK = "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:12345#HTTPS-test"
@@ -20,6 +25,27 @@ LINK = "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:12345#HTTPS-test"
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.server.seen.append(dict(self.headers))
+        if self.path in ('/hwid-required', '/limit'):
+            self.send_response(200 if self.path == '/limit' else 404)
+            self.send_header('x-hwid-max-devices-reached' if self.path == '/limit' else 'x-hwid-not-supported', 'true')
+            self.end_headers()
+            return
+        if self.path == '/neko':
+            expected = {'x-hwid': '0123456789abcdef', 'x-device-os': 'Android', 'x-ver-os': '16', 'x-device-model': 'Test Device'}
+            if any(self.headers.get(k) != v for k, v in expected.items()) or not self.headers.get('user-agent', '').startswith('v2rayNG/'):
+                self.send_response(403); self.end_headers(); return
+            payload = gzip.compress(base64.b64encode(LINK.encode()))
+            self.send_response(200)
+            self.send_header('Content-Encoding', 'gzip')
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        if self.path == '/gzip-overflow':
+            self.send_response(200)
+            self.send_header('Content-Encoding', 'gzip')
+            self.end_headers()
+            self.wfile.write(gzip.compress(b'x' * (8 * 1024 * 1024 + 1)))
+            return
         if self.path == "/redirect":
             self.send_response(302)
             self.send_header("Location", "/sub")
@@ -85,6 +111,39 @@ class HTTPSSubscriptionTests(unittest.TestCase):
             with self.assertRaises(UserError):
                 update(result, s["id"], lambda profiles: None, fetch)
             self.assertEqual(before, result)
+
+    def test_neko_hwid_user_agent_gzip_and_provider_denials_over_tls(self):
+        state = defaults()
+        s = validate_subscription({'url': self.url + '/neko', 'hwid_mode': 'remnawave', 'hwid_params': 'hwid=0123456789abcdef,os=Android,osVersion=16,model=Test Device'})
+        state['subscriptions'] = [s]
+        fetch = lambda url, headers: download(url, headers, self.opener)
+        result = update(state, s['id'], lambda _: None, fetch)
+        self.assertEqual(len(result['profiles']), 1)
+        for path, message in [('/hwid-required', 'не принял HWID'), ('/limit', 'лимит устройств'), ('/gzip-overflow', 'больше 8 МиБ')]:
+            result['subscriptions'][0]['url'] = self.url + path
+            before = copy.deepcopy(result)
+            with self.assertRaisesRegex(UserError, message):
+                update(result, s['id'], lambda _: None, fetch)
+            self.assertEqual(result, before)
+
+    def test_service_manual_and_scheduled_refresh_use_saved_hwid_and_agent(self):
+        with tempfile.TemporaryDirectory() as root, patch('helmsman.subscriptions.urllib.request.build_opener', return_value=self.opener):
+            c = Controller(Store(root), MemoryRuntime(root))
+            c.call('hwid', {'value': '0123456789abcdef'})
+            saved = c.call('subscription_save', {'url': self.url + '/neko', 'hwid_mode': 'remnawave', 'hwid_params': 'hwid=0123456789abcdef,os=Android,osVersion=16,model=Test Device', 'interval_hours': 1})
+            c.call('subscriptions_update', saved)
+            self.assertEqual(len(c.data['profiles']), 1)
+            before = copy.deepcopy(c.data['profiles'])
+            c.data['subscriptions'][0]['last_attempt'] = 0
+            c.tick()
+            self.assertEqual(c.data['profiles'], before)
+            self.assertEqual(c.data['subscriptions'][0]['error'], '')
+            c.data['subscriptions'][0]['url'] = self.url + '/limit'
+            with self.assertRaisesRegex(UserError, 'лимит устройств'):
+                c.call('subscriptions_update', saved)
+            self.assertEqual(c.data['profiles'], before)
+            self.assertEqual(c.data['hwid'], '0123456789abcdef')
+            self.assertIn('лимит устройств', c.data['subscriptions'][0]['error'])
 
 
 if __name__ == "__main__":

@@ -16,8 +16,10 @@ def only(value, fields, name):
 
 
 def native_tls(value, reality=False):
-    allowed = {"fingerprint", "serverName", "alpn", "useSystemCA"} if not reality else {"fingerprint", "serverName", "publicKey", "password", "shortId", "spiderX", "mldsa65Verify"}
-    only(value, allowed, "XHTTP TLS/REALITY")
+    allowed = {"fingerprint", "serverName", "alpn", "useSystemCA", "allowInsecure"} if not reality else {"fingerprint", "serverName", "publicKey", "password", "shortId", "spiderX", "mldsa65Verify", "show"}
+    only(value, allowed, "TLS/REALITY")
+    if value.get("allowInsecure"):
+        raise UserError("Отключение проверки TLS не допускается.")
     return copy.deepcopy(value)
 
 
@@ -107,14 +109,17 @@ def compile_xray(profile, proxy=None, bootstrap="9.9.9.9", ipv6=True):
 
 def import_outbound(raw):
     """Import one native Xray outbound, excluding routing, APIs and file paths."""
-    only(raw, {"protocol", "tag", "settings", "streamSettings"}, "Xray outbound")
+    only(raw, {"protocol", "tag", "settings", "streamSettings", "mux"}, "Xray outbound")
+    if raw.get("mux", {}).get("enabled"):
+        raise UserError("Xray JSON: включённый mux пока не переносится; выберите URI/Base64.")
     t = raw["protocol"]
     if t not in {"vless", "vmess", "trojan"}:
-        raise UserError("Нативный Xray JSON: нужен VLESS/VMess/Trojan XHTTP или WireGuard.")
+        raise UserError("Нативный Xray JSON: нужен VLESS, VMess, Trojan или WireGuard.")
     s = raw.get("streamSettings", {})
-    only(s, {"network", "security", "xhttpSettings", "splithttpSettings", "tlsSettings", "realitySettings"}, "Xray streamSettings")
-    if s.get("network") not in {"xhttp", "splithttp"}:
-        raise UserError("Нативный Xray JSON поддерживается для транспорта XHTTP.")
+    only(s, {"network", "security", "xhttpSettings", "splithttpSettings", "tlsSettings", "realitySettings", "tcpSettings", "rawSettings", "wsSettings", "grpcSettings", "httpSettings", "httpupgradeSettings"}, "Xray streamSettings")
+    network = s.get("network", "tcp")
+    if network not in {"tcp", "raw", "ws", "grpc", "http", "h2", "httpupgrade", "xhttp", "splithttp"}:
+        raise UserError("Неподдерживаемый транспорт Xray JSON.")
     settings = raw["settings"]
     only(settings, {"servers"} if t == "trojan" else {"vnext"}, "Xray settings")
     servers = settings["servers" if t == "trojan" else "vnext"]
@@ -122,7 +127,33 @@ def import_outbound(raw):
         raise UserError("Xray: в одном профиле нужен один сервер.")
     server = servers[0]
     only(server, {"address", "port", "password"} if t == "trojan" else {"address", "port", "users"}, "Xray server")
-    o = {"type": t, "server": server["address"], "server_port": server["port"], "transport": {"type": "xhttp", **xhttp_settings(s.get("xhttpSettings", s.get("splithttpSettings", {})))}}
+    o = {"type": t, "server": server["address"], "server_port": server["port"]}
+    if network in {"xhttp", "splithttp"}:
+        o["transport"] = {"type": "xhttp", **xhttp_settings(s.get("xhttpSettings", s.get("splithttpSettings", {})))}
+    elif network in {"tcp", "raw"}:
+        tcp = s.get("tcpSettings", s.get("rawSettings", {}))
+        only(tcp, {"header"}, "Xray TCP")
+        if tcp.get("header", {"type": "none"}) != {"type": "none"}:
+            raise UserError("TCP header: поддерживается только none.")
+    else:
+        field = {"ws": "wsSettings", "grpc": "grpcSettings", "http": "httpSettings", "h2": "httpSettings", "httpupgrade": "httpupgradeSettings"}[network]
+        settings_transport = s.get(field, {})
+        transport = {"type": "http" if network == "h2" else network}
+        if network == "grpc":
+            only(settings_transport, {"serviceName", "multiMode"}, "Xray gRPC")
+            if settings_transport.get("multiMode"):
+                raise UserError("gRPC multiMode пока не поддерживается.")
+            transport["service_name"] = settings_transport.get("serviceName", "")
+        elif network == "ws":
+            only(settings_transport, {"path", "headers", "maxEarlyData", "earlyDataHeaderName"}, "Xray WebSocket")
+            transport.update(path=settings_transport.get("path", "/"), headers=settings_transport.get("headers", {}))
+            for source, target in (("maxEarlyData", "max_early_data"), ("earlyDataHeaderName", "early_data_header_name")):
+                if source in settings_transport:
+                    transport[target] = settings_transport[source]
+        else:
+            only(settings_transport, {"path", "host"}, "Xray HTTP")
+            transport.update(path=settings_transport.get("path", "/"), host=settings_transport.get("host", [] if network in {"http", "h2"} else ""))
+        o["transport"] = transport
     if t == "trojan":
         o["password"] = server["password"]
     else:
@@ -139,16 +170,18 @@ def import_outbound(raw):
             o.update(security=u.get("security", "auto"), alter_id=u.get("alterId", 0))
     security = s.get("security", "none")
     if security not in {"none", "tls", "reality"}:
-        raise UserError("Xray XHTTP: неизвестный режим безопасности.")
+        raise UserError("Xray: неизвестный режим безопасности.")
     if security != "none":
         nt = native_tls(s.get("realitySettings" if security == "reality" else "tlsSettings", {}), security == "reality")
         tls = {"enabled": True, "server_name": nt.get("serverName", server["address"])}
         if nt.get("alpn"):
             tls["alpn"] = nt["alpn"]
-        if nt.get("fingerprint"):
-            tls["utls"] = {"enabled": True, "fingerprint": nt["fingerprint"]}
+        if nt.get("fingerprint") or security == "reality":
+            tls["utls"] = {"enabled": True, "fingerprint": nt.get("fingerprint", "chrome")}
         if security == "reality":
-            tls["reality"] = {"enabled": True, "public_key": nt.get("publicKey", nt.get("password", "")), "short_id": nt.get("shortId", ""), "spider_x": nt.get("spiderX", "")}
+            tls["reality"] = {"enabled": True, "public_key": nt.get("publicKey", nt.get("password", "")), "short_id": nt.get("shortId", "")}
+            if network in {"xhttp", "splithttp"}:
+                tls["reality"]["spider_x"] = nt.get("spiderX", "")
             if nt.get("mldsa65Verify"):
                 tls["reality"]["mldsa65_verify"] = nt["mldsa65Verify"]
         o["tls"] = tls

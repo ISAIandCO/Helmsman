@@ -94,7 +94,7 @@ class CoreTests(unittest.TestCase):
         s.update(hwid_mode="query", hwid_name="device", hwid="manual-id")
         self.assertIn("a=1&device=manual-id", request_data(s, "ignored")[0])
         s.update(hwid_mode="header", hwid_name="X-Device-Id")
-        self.assertEqual(request_data(s, "ignored")[1]["X-Device-Id"], "manual-id")
+        self.assertEqual(request_data(s, "ignored")[1]["x-device-id"], "manual-id")
         with self.assertRaises(UserError):
             validate_subscription({**base, "headers": {"x-bad": "abc\r\nInjected: yes"}})
 
