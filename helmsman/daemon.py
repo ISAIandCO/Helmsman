@@ -13,6 +13,7 @@ from collections import deque
 from pathlib import Path
 
 from .common import MAX_BYTES, PRESETS, RU_BASE, SOCKET, Store, UserError, VERSION, atomic_json, identifier, label
+from .dns import bootstrap_address, resolver_url
 from .importers import parse
 from .routing import compile_config, rule, source_list, text_list
 from .subscriptions import download, https_url, update, validate_subscription
@@ -253,9 +254,9 @@ class Controller:
                     raise UserError("MTU: 1280–9000; повтор: 5–300 с; списки: 1–720 ч.")
                 if c["default_action"] not in {"proxy", "direct", "block"}:
                     raise UserError("Некорректный маршрут по умолчанию.")
-                import ipaddress
                 for key in ("dns_proxy", "dns_direct"):
-                    ipaddress.ip_address(c[key])
+                    c[key] = resolver_url(c[key])
+                c["dns_bootstrap"] = bootstrap_address(c["dns_bootstrap"])
                 self.commit(candidate, restart=True)
             elif method == "list_save":
                 candidate = copy.deepcopy(self.data)

@@ -8,6 +8,7 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QTabWidget, QVBoxLayout, QWidget)
 
 from .common import MAX_BYTES, PRESETS, UserError, VERSION
+from .dns import DNS_PRESETS, resolver_url
 from .rpc import call
 
 
@@ -80,6 +81,44 @@ def integer(value, minimum, maximum):
     w.setRange(minimum, maximum)
     w.setValue(int(value))
     return w
+
+
+class DNSSelector(QWidget):
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+        self.picker = combo({url: name for name, url in DNS_PRESETS})
+        self.picker.addItem("Свой сервер…", "")
+        self.address = line()
+        self.address.setPlaceholderText("https://сервер/dns-query или tls://сервер:853")
+        self.address.setAccessibleName("Адрес DNS DoH или DoT")
+        self.picker.setAccessibleName("Готовый DNS или свой сервер")
+        layout.addWidget(self.picker)
+        layout.addWidget(self.address)
+        self.picker.activated.connect(self.choose)
+        self.address.textEdited.connect(self.edited)
+
+    def choose(self, index):
+        self.address.setText(self.picker.itemData(index))
+        if not self.address.text():
+            self.address.setFocus()
+
+    def edited(self, value):
+        index = self.picker.findData(value)
+        self.picker.setCurrentIndex(index if index >= 0 else self.picker.count() - 1)
+
+    def value(self):
+        return self.address.text()
+
+    def set_value(self, value):
+        try:
+            value = resolver_url(value)
+        except UserError:
+            pass
+        self.address.setText(value)
+        self.edited(value)
 
 
 class Window(QMainWindow):
@@ -419,10 +458,16 @@ class Window(QMainWindow):
             w = integer(low, low, high)
             form.addRow(name, w)
             self.setting_widgets[key] = w
-        for key, name in [("dns_proxy", "DNS через VPN (DoH, IP)"), ("dns_direct", "Прямой DNS (DoH и начальный UDP, IP)")]:
-            w = line()
+        for key, name in [("dns_proxy", "DNS через VPN"), ("dns_direct", "DNS прямых запросов")]:
+            w = DNSSelector()
             form.addRow(name, w)
             self.setting_widgets[key] = w
+        w = line()
+        form.addRow("Начальный DNS (UDP, IP)", w)
+        self.setting_widgets["dns_bootstrap"] = w
+        help_text = QLabel("DoH — HTTPS; DoT — TLS. Можно выбрать готовый сервер или изменить адрес ниже.\nНачальный DNS разрешает имена VPN/DNS-серверов до туннеля и локальные .lan/.local/.home.arpa.\nВнутренний DNS из профиля WG/AWG имеет приоритет над DNS через VPN.\nПри ошибке DoH/DoT скрытого перехода на обычный DNS нет.")
+        help_text.setWordWrap(True)
+        form.addRow(help_text)
         w = combo({"proxy": "VPN", "direct": "Напрямую", "block": "Блокировать"})
         form.addRow("Маршрут в «Моих правилах»", w)
         self.setting_widgets["default_action"] = w
@@ -434,7 +479,7 @@ class Window(QMainWindow):
     def save_settings(self):
         result = {}
         for key, w in self.setting_widgets.items():
-            result[key] = w.isChecked() if isinstance(w, QCheckBox) else w.value() if isinstance(w, QSpinBox) else w.currentData() if isinstance(w, QComboBox) else w.text()
+            result[key] = w.isChecked() if isinstance(w, QCheckBox) else w.value() if isinstance(w, (QSpinBox, DNSSelector)) else w.currentData() if isinstance(w, QComboBox) else w.text()
         self.mutate("settings_save", {"settings": result})
 
     def build_diagnostics(self):
@@ -470,6 +515,8 @@ class Window(QMainWindow):
                 w.setChecked(value)
             elif isinstance(w, QSpinBox):
                 w.setValue(int(value))
+            elif isinstance(w, DNSSelector):
+                w.set_value(value)
             elif isinstance(w, QComboBox):
                 w.setCurrentIndex(w.findData(value))
             else:

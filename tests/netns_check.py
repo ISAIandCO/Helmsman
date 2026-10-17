@@ -93,7 +93,7 @@ def client():
     p = parse(f"vless://{UUID}@10.90.0.1:19001")[0]
     p["dns"] = "198.51.100.2"
     state.update(profiles=[p], selected=p["id"], desired=True)
-    state["settings"].update(lan=False, dns_direct="198.51.100.2")
+    state["settings"].update(lan=False, dns_bootstrap="198.51.100.2")
     store.save()
     saved_hwid = state["hwid"]
     controller = Controller(store, runtime)
@@ -124,7 +124,9 @@ def client():
         print("PASS real UDP through VLESS/TUN", flush=True)
         echo("game.example")
         print("PASS DNS interception + FakeIP + remote resolution", flush=True)
-        state["rules"] = [rule({"type": "domain_suffix", "values": ["blocked.example"], "action": "block"}), rule({"type": "ip_cidr", "values": ["198.51.100.3/32"], "action": "block"})]
+        imported_list = call("list_save", {"name": "Test blocked IP set", "format": "text", "content": "198.51.100.3/32"}, control_path)
+        state = controller.data
+        state["rules"] = [rule({"type": "domain_suffix", "values": ["blocked.example"], "action": "block"}), rule({"type": "list", "values": [imported_list["id"]], "action": "block"})]
         runtime.start(state, p)
         time.sleep(0.5)
         for target in ("blocked.example", "198.51.100.3"):
@@ -135,7 +137,7 @@ def client():
             else:
                 raise AssertionError("Blocked route leaked: " + target)
         echo()
-        print("PASS domain/DNS block and IP block; other traffic still works", flush=True)
+        print("PASS domain/DNS block and imported IP set with engine-only file access", flush=True)
         runtime.process.kill()
         runtime.process.wait(timeout=5)
         try:

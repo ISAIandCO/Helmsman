@@ -1,9 +1,11 @@
 import copy
+import json
 import ipaddress
 import re
 from pathlib import Path
 
 from .common import PRESETS, UserError, identifier, label
+from .dns import bootstrap_address, dns_server
 
 RULE_TYPES = {"domain", "domain_suffix", "ip_cidr", "list", "process_name", "process_path", "port"}
 LIST_FIELDS = {"domain", "domain_suffix", "ip_cidr"}
@@ -58,8 +60,10 @@ def source_list(obj):
             values = values if isinstance(values, list) else [values]
             if not values or len(values) > 1000000:
                 raise UserError("Пустой или слишком большой список.")
+            normalized = []
             for start in range(0, len(values), 10000):
-                rule({"type": k, "values": values[start:start + 10000]})
+                normalized.extend(rule({"type": k, "values": values[start:start + 10000]})["values"])
+            r[k] = normalized
     return obj
 
 
@@ -97,9 +101,9 @@ def compile_config(state, profile, runtime, engine_uid, tun=True):
                 "outbounds": [{"type": "direct", "tag": "direct"}] + ([] if endpoint else [outbound]),
                 "endpoints": [outbound] if endpoint else [],
                 "dns": {"servers": [
-                    {"type": "udp", "tag": "bootstrap", "server": s["dns_direct"]},
-                    {"type": "https", "tag": "dns-direct", "server": s["dns_direct"]},
-                    {"type": "https", "tag": "dns-proxy", "server": s["dns_proxy"], "detour": "proxy"},
+                    {"type": "udp", "tag": "bootstrap", "server": bootstrap_address(s.get("dns_bootstrap", "9.9.9.9"))},
+                    dns_server(s["dns_direct"], "dns-direct"),
+                    dns_server(s["dns_proxy"], "dns-proxy", proxy=True),
                     {"type": "fakeip", "tag": "fakeip", "inet4_range": "198.18.0.0/15", "inet6_range": "fc00::/18"}],
                     "rules": [], "final": "dns-proxy", "strategy": "prefer_ipv4" if s["ipv6"] else "ipv4_only", "reverse_mapping": True},
                 "route": {"auto_detect_interface": True, "default_domain_resolver": {"server": "bootstrap", "strategy": "prefer_ipv4"}, "rules": [], "rule_set": [], "final": "proxy"},
@@ -126,6 +130,7 @@ def compile_config(state, profile, runtime, engine_uid, tun=True):
     requested_final = "direct" if preset == "ru-selective" else s["default_action"] if preset == "manual" else "proxy"
     resolver = "dns-direct" if requested_final == "direct" else "dns-proxy"
     used = set()
+    lists = {x["id"]: x for x in state["lists"]}
     resolved = False
     for item in rules:
         key = "rule_set" if item["type"] == "list" else item["type"]
@@ -139,12 +144,32 @@ def compile_config(state, profile, runtime, engine_uid, tun=True):
             resolved = True
         r.append({**cond, **({"action": "reject"} if item["action"] == "block" else {"outbound": item["action"]})})
         if item["type"] in {"domain", "domain_suffix", "list"}:
+            dns_cond = cond
+            if item["type"] == "list":
+                # 1.14 rejects legacy destination-IP filters in DNS rule sets.
+                # DNS decisions use only the domain projection; real-IP rules
+                # are evaluated by routing after the explicit resolve action.
+                domains = {"domain": [], "domain_suffix": []}
+                for tag in item["values"]:
+                    if tag not in lists or not lists[tag].get("path") or not Path(lists[tag]["path"]).is_file():
+                        raise UserError("Сначала загрузите список: " + tag)
+                    for entry in json.loads(Path(lists[tag]["path"]).read_text())["rules"]:
+                        for k in domains:
+                            value = entry.get(k, [])
+                            domains[k].extend(value if isinstance(value, list) else [value])
+                choices = [{k: list(dict.fromkeys(v))} for k, v in domains.items() if v]
+                if not choices:
+                    continue
+                dns_cond = choices[0] if len(choices) == 1 else {"type": "logical", "mode": "or", "rules": choices}
             if item["action"] == "block":
-                settings["dns"]["rules"].append({**cond, "action": "reject"})
+                settings["dns"]["rules"].append({**dns_cond, "action": "reject"})
             elif item["action"] == "direct":
-                settings["dns"]["rules"].append({**cond, "server": "dns-direct"})
+                settings["dns"]["rules"].append({**dns_cond, "server": "dns-direct"})
             else:
-                settings["dns"]["rules"].append({**cond, "query_type": ["A", "AAAA"], "server": "fakeip"})
+                if dns_cond.get("type") == "logical":
+                    settings["dns"]["rules"].append({"type": "logical", "mode": "and", "rules": [dns_cond, {"query_type": ["A", "AAAA"]}], "server": "fakeip"})
+                else:
+                    settings["dns"]["rules"].append({**dns_cond, "query_type": ["A", "AAAA"], "server": "fakeip"})
     final = requested_final
     if final == "block":
         r.append({"action": "reject"})
@@ -152,7 +177,6 @@ def compile_config(state, profile, runtime, engine_uid, tun=True):
     settings["route"]["final"] = final
     settings["dns"]["final"] = "dns-direct" if final == "direct" else "dns-proxy"
     settings["dns"]["rules"].append({"action": "reject"} if requested_final == "block" else {"query_type": ["A", "AAAA"], "server": "fakeip"})
-    lists = {x["id"]: x for x in state["lists"]}
     for tag in sorted(used):
         if tag not in lists or not lists[tag].get("path") or not Path(lists[tag]["path"]).is_file():
             raise UserError("Сначала загрузите список: " + tag)

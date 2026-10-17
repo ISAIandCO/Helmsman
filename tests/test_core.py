@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 from helmsman.common import Store, UserError, defaults
 from helmsman.daemon import Controller, Server
+from helmsman.dns import DNS_PRESETS, dns_server, resolver_url
 from helmsman.importers import parse
 from helmsman.routing import compile_config, rule, text_list
 from helmsman.rpc import call
@@ -155,6 +156,29 @@ class CoreTests(unittest.TestCase):
         compile_config(state, p, "/tmp", 999)
         self.assertEqual(state["rules"], original)
 
+    def test_custom_encrypted_dns_and_invalid_update_preserves_settings(self):
+        for value in ("https://private.example/custom/token?device=abc", "tls://dns.example:8853", "https://[2606:4700:4700::1111]/dns-query"):
+            self.assertEqual(resolver_url(value), value)
+        self.assertEqual(resolver_url("dot://DNS.Example/"), "tls://dns.example")
+        self.assertEqual(resolver_url("1.1.1.1"), "https://1.1.1.1/dns-query")
+        for invalid in ("http://dns.example", "https://user:password@dns.example/dns-query", "tls://dns.example/query", "tls://dns.example?token=x", "https://dns.example:0/x", "https://dns.example/#secret", "https://dns example/", "https://dns.example:/x"):
+            with self.subTest(invalid=invalid), self.assertRaises(UserError):
+                resolver_url(invalid)
+        with tempfile.TemporaryDirectory() as d:
+            c = Controller(Store(d), MemoryRuntime(d))
+            c.call("settings_save", {"settings": {"dns_proxy": "tls://dns.google", "dns_direct": "https://private.example/custom?key=abc", "dns_bootstrap": "1.1.1.1"}})
+            before = copy.deepcopy(c.data)
+            for key, value in (("dns_proxy", "http://unsafe.example"), ("dns_direct", "tls://dns.example:99999"), ("dns_bootstrap", "not-an-ip")):
+                with self.assertRaises(UserError):
+                    c.call("settings_save", {"settings": {key: value}})
+                self.assertEqual(c.data, before)
+            reopened = Store(d)
+            self.assertEqual(reopened.data, before)
+            del reopened.data["settings"]["dns_bootstrap"]
+            reopened.save()
+            self.assertEqual(Store(d).data["settings"]["dns_proxy"], "tls://dns.google")
+            self.assertEqual(Store(d).data["settings"]["dns_bootstrap"], "9.9.9.9")
+
     def test_large_public_list_and_failed_list_update(self):
         from helmsman.routing import source_list
         source_list({"version": 3, "rules": [{"domain_suffix": ["example.com"] * 15000}]})
@@ -234,6 +258,25 @@ class CoreTests(unittest.TestCase):
 
 class EngineSchemaTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("HELMSMAN_ENGINES"), "set HELMSMAN_ENGINES to run real engine checks")
+    def test_all_dns_presets_and_custom_endpoints_with_both_engines(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            state = defaults()
+            for name in ("sing-box", "sing-box-awg"):
+                for _, value in DNS_PRESETS + (("custom", "https://private.example:8443/dns/token?device=abc"), ("custom", "tls://dns.example:8853")):
+                    state["settings"].update(dns_proxy=value, dns_direct=value)
+                    config = compile_config(state, parse(LINK)[0], d, os.getuid())
+                    direct, remote = config["dns"]["servers"][1:3]
+                    self.assertNotIn("detour", direct)
+                    self.assertEqual(remote["detour"], "proxy")
+                    self.assertEqual(remote["domain_resolver"]["server"], "bootstrap")
+                    self.assertNotIn("insecure", remote["tls"])
+                    file = Path(d) / "dns-check.json"
+                    file.write_text(json.dumps(config))
+                    result = subprocess.run([str(Path(os.environ["HELMSMAN_ENGINES"]) / name), "check", "-c", str(file)], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 0, name + " " + value + " " + result.stderr)
+
+    @unittest.skipUnless(os.environ.get("HELMSMAN_ENGINES"), "set HELMSMAN_ENGINES to run real engine checks")
     def test_generated_configs_with_both_engines(self):
         import subprocess
         with tempfile.TemporaryDirectory() as d:
@@ -241,13 +284,18 @@ class EngineSchemaTests(unittest.TestCase):
             engine_root = Path(os.environ["HELMSMAN_ENGINES"])
             subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(root / "key"), "-out", str(root / "cert"), "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost", "-addext", "extendedKeyUsage=serverAuth"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             cert = (root / "cert").read_text()
-            ovpn = "client\ndev tun\nproto udp\nremote 127.0.0.1 1194\nremote-cert-tls server\n<ca>\n" + cert + "</ca>\n"
+            ovpn = "client\ndev tun\nproto udp\nremote 127.0.0.1 1194\ncipher AES-256-GCM\nremote-cert-tls server\n<ca>\n" + cert + "</ca>\n"
             items = [parse(LINK)[0], parse(WG)[0], parse(WG.replace("Address=", "Jc=4\nJmin=40\nJmax=80\nS3=12\nH1=123-456\nAddress="))[0], parse(ovpn)[0], parse("hy2://test@127.0.0.1:443?sni=localhost")[0]]
             for p in items:
                 name = "sing-box-awg" if p["outbound"].get("amnezia_wg") else "sing-box"
                 binary = engine_root / name
                 self.assertTrue(binary.is_file(), name)
-                config = compile_config(defaults(), p, root, os.getuid())
+                state = defaults()
+                source = root / "mixed-list.json"
+                source.write_text(json.dumps({"version": 3, "rules": [{"domain": ["exact.example"]}, {"domain_suffix": ["fixture.example"]}, {"ip_cidr": ["203.0.113.0/24"]}]}))
+                state["lists"] = [{"id": "a" * 32, "path": str(source)}]
+                state["rules"] = [rule({"type": "list", "values": ["a" * 32], "action": "proxy"})]
+                config = compile_config(state, p, root, os.getuid())
                 file = root / "check.json"
                 file.write_text(json.dumps(config))
                 result = subprocess.run([str(binary), "check", "-c", str(file)], capture_output=True, text=True)

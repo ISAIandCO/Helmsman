@@ -273,7 +273,7 @@ def openvpn(text, name="OpenVPN"):
     if set(blocks) - {"ca", "cert", "key", "tls-auth", "tls-crypt", "tls-crypt-v2", "auth-user-pass"}:
         raise UserError("OpenVPN: неподдерживаемый inline-блок.")
     ignored = {"client", "tls-client", "nobind", "persist-key", "persist-tun", "resolv-retry", "verb", "mute", "route", "route-ipv6", "redirect-gateway", "dhcp-option", "pull", "route-nopull", "auth-nocache", "explicit-exit-notify"}
-    remotes, proto, direction = [], "udp", ""
+    remotes, proto, direction, legacy_cipher = [], "udp", "", ""
     for line in rest.splitlines():
         tokens = shlex.split(line, comments=True)
         if not tokens or tokens[0].startswith(";"):
@@ -299,7 +299,9 @@ def openvpn(text, name="OpenVPN"):
         elif k == "auth-user-pass" and not v:
             if "auth-user-pass" not in blocks:
                 raise UserError("OpenVPN: добавьте inline-блок <auth-user-pass> с логином и паролем или импортируйте JSON-профиль.")
-        elif k in {"cipher", "auth", "data-ciphers-fallback"} and len(v) == 1:
+        elif k == "cipher" and len(v) == 1:
+            legacy_cipher = v[0]
+        elif k in {"auth", "data-ciphers-fallback"} and len(v) == 1:
             o[k.replace("-", "_")] = v[0]
         elif k == "data-ciphers" and len(v) == 1:
             o["data_ciphers"] = v[0].split(":")
@@ -317,6 +319,8 @@ def openvpn(text, name="OpenVPN"):
         r["network"] = r["network"] or proto
     o["servers"] = remotes
     o["network"] = proto
+    if legacy_cipher:
+        o.setdefault("data_ciphers_fallback", legacy_cipher)
     for a, b in {"ca": "certificate", "cert": "client_certificate", "key": "client_key"}.items():
         if a in blocks:
             o["tls"][b] = [blocks[a]]

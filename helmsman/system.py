@@ -158,7 +158,7 @@ class Runtime:
         # physical default/global route or DNS during the first join window.
         (networks / (p["network_id"] + ".local.conf")).write_text("allowManaged=1\nallowGlobal=0\nallowDefault=0\nallowDNS=0\n")
         os.chmod(networks / (p["network_id"] + ".local.conf"), 0o600)
-        self.process = subprocess.Popen([str(self.binaries / "zerotier-one"), "-p19993", str(self.zt_home)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.process = subprocess.Popen([str(self.binaries / "zerotier-one"), "-p19993", str(self.zt_home)], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8", "HOME": str(self.zt_home)})
         self.profile = p
         self.started = time.monotonic()
 

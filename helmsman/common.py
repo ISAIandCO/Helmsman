@@ -45,7 +45,8 @@ def defaults():
     return {"schema": 1, "hwid": identifier(), "profiles": [], "subscriptions": [],
             "selected": "", "desired": False, "preset": "full", "rules": [], "lists": [],
             "settings": {"kill_switch": True, "lan": True, "ipv6": True, "mtu": 1400,
-                         "default_action": "proxy", "dns_proxy": "1.1.1.1", "dns_direct": "9.9.9.9",
+                         "default_action": "proxy", "dns_proxy": "https://cloudflare-dns.com/dns-query", "dns_direct": "https://dns.quad9.net/dns-query",
+                         "dns_bootstrap": "9.9.9.9",
                          "reconnect_seconds": 15, "list_update_hours": 24}}
 
 
@@ -62,6 +63,9 @@ class Store:
                 for key in defaults():
                     if key not in self.data:
                         raise ValueError(key)
+                # Add settings without replacing existing endpoints or HWID.
+                for key, value in defaults()["settings"].items():
+                    self.data["settings"].setdefault(key, value)
             except (ValueError, KeyError, TypeError):
                 raise UserError("Файл настроек повреждён или создан другой версией. Сохраните его и восстановите резервную копию.") from None
         else:
