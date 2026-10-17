@@ -19,6 +19,12 @@ def rpc(method, params=None):
     return json.loads(subprocess.check_output([binary, "ctl", method, json.dumps(params or {})], text=True))
 
 
+# GitHub runners make /opt writable for tool installation. Match the secure
+# system directory on the target before testing a root service installation.
+subprocess.run(["stat", "-c", "%U:%G %a %n", "/opt"], check=True)
+subprocess.run(["sudo", "chown", "root:root", "/opt"], check=True)
+subprocess.run(["sudo", "chmod", "0755", "/opt"], check=True)
+
 try:
     subprocess.run(["sudo", "bash", str(stage / "install.sh"), "--user", user], check=True)
     rpc("import", {"text": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:9?type=xhttp&mode=packet-up#Installed-fixture"})
