@@ -1,4 +1,4 @@
-import { ButtonItem, DropdownItem, PanelSection, PanelSectionRow, staticClasses } from "@decky/ui";
+import { ButtonItem, DropdownItem, PanelSection, PanelSectionRow, TextField, ToggleField, staticClasses } from "@decky/ui";
 import { callable, definePlugin } from "@decky/api";
 import { useEffect, useState } from "react";
 
@@ -15,6 +15,9 @@ function Content() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [probe, setProbe] = useState("");
+  const [warpTerms, setWarpTerms] = useState(false);
+  const [warpMode, setWarpMode] = useState("awg");
+  const [warpEndpoint, setWarpEndpoint] = useState("");
   useEffect(() => {
     let alive = true;
     let pending = false;
@@ -39,7 +42,7 @@ function Content() {
     setError("");
     try {
       const result = await rpc(method, params);
-      if (method === "probe") setProbe((result as { message: string }).message);
+      if (method === "probe" || method === "warp_generate") setProbe((result as { message: string }).message);
       setStatus(await rpc("status", {}) as Status);
     } catch (e) { setError(String(e)); }
     finally { setBusy(false); }
@@ -67,6 +70,13 @@ function Content() {
           rgOptions={Object.entries(status.presets).map(([data, label]) => ({ data, label }))}
           onChange={o => action("preset", { preset: o.data })} /></PanelSectionRow>
       </>}
+    </PanelSection>
+    <PanelSection title="Cloudflare WARP">
+      <PanelSectionRow><div style={{ fontSize: 12, overflowWrap: "anywhere" }}>WARP через wgcf. По умолчанию — AmneziaWG с I1 и junk-пакетами. Учётная запись сохраняется на Deck и используется повторно. Условия: https://www.cloudflare.com/application/terms/</div></PanelSectionRow>
+      <PanelSectionRow><DropdownItem label="Режим WARP" disabled={busy} selectedOption={warpMode} rgOptions={[{data: "awg", label: "AmneziaWG (с маскировкой)"}, {data: "wireguard", label: "WireGuard (обычный)"}]} onChange={o => setWarpMode(o.data)} /></PanelSectionRow>
+      <PanelSectionRow><TextField label="Свой endpoint (необязательно)" value={warpEndpoint} disabled={busy} onChange={e => setWarpEndpoint(e.target.value)} /></PanelSectionRow>
+      <PanelSectionRow><ToggleField label="Принимаю условия Cloudflare" checked={warpTerms} disabled={busy} onChange={setWarpTerms} /></PanelSectionRow>
+      <PanelSectionRow><ButtonItem layout="below" disabled={busy || !warpTerms} onClick={() => action("warp_generate", { accept_terms: warpTerms, mode: warpMode, endpoint: warpEndpoint })}>Создать / восстановить WARP</ButtonItem></PanelSectionRow>
     </PanelSection>
     <PanelSection title="Обслуживание">
       <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => action("subscriptions_update")}>Обновить подписки</ButtonItem></PanelSectionRow>

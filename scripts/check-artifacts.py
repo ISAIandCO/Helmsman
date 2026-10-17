@@ -13,7 +13,7 @@ for line in (root / "SHA256SUMS").read_text().splitlines():
 app = next(root.glob("*-linux-x86_64.tar.gz"))
 with tarfile.open(app) as archive:
     names = archive.getnames()
-    for name in ("app/Helmsman", "app/engines/sing-box", "app/engines/sing-box-awg", "app/engines/zerotier-one", "install.sh", "uninstall.sh", "decky/dist/index.js"):
+    for name in ("app/Helmsman", "app/engines/sing-box", "app/engines/sing-box-awg", "app/engines/zerotier-one", "app/engines/xray", "app/engines/wgcf", "install.sh", "uninstall.sh", "decky/dist/index.js"):
         assert any(x.endswith("/" + name) for x in names), name
     with tempfile.TemporaryDirectory() as d:
         archive.extractall(d, filter="data")

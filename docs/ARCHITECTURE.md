@@ -34,3 +34,9 @@
 Команды: status, configuration (с секретами, только доверенный локальный клиент), diagnostics, import, profile_save/rename/delete, connect/disconnect/select, preset, subscription_save/delete, subscriptions_update, hwid, rules_save, settings_save, list_save/delete, lists_update, probe. Decky backend разрешает только повседневное подмножество; configuration ему не доступна.
 
 `Helmsman ctl status`; `Helmsman ctl preset '{"preset":"full"}'`; `Helmsman ctl disconnect`.
+
+## XHTTP и WARP
+
+XHTTP сохраняется как нормализованный клиентский outbound в той же базе профилей. Runtime проверяет Xray и sing-box до смены подключения, запускает Xray без capabilities под выделенным engine UID и связывает его с sing-box через loopback SOCKS5 со случайным паролем/портом. Только sing-box управляет TUN и DNS. При обнаружении завершения Xray сервис останавливает TUN-клиент, сохраняет guard и восстанавливает оба процесса. Disconnect/удаление останавливают оба процесса и удаляют временные конфигурации. Bootstrap для hostname XHTTP endpoint задаётся тем же явным IP DNS; запросы приложений остаются в общей DNS-политике. Для основного TLS используется системное CA-хранилище, проверка не отключается.
+
+WARP-регистрация вызывается только RPC `warp_generate` с явным `accept_terms=true`. wgcf работает с отдельным приватным account.toml; stdout/stderr подавлены, поскольку upstream печатает ключи и токены. Возвращается только ID/понятный результат. Account переживает ошибки generate и обновления. Публичный локальный AWG/CPS-шаблон применяется после получения WG-профиля; регистрация и криптография не реализуются заново. Сигнатура I1 берётся из лицензированного upstream, не из приватной конфигурации пользователя.

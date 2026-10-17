@@ -59,15 +59,20 @@ def server():
     file = ROOT / "server.json"
     file.write_text(json.dumps(config))
     p = subprocess.Popen([str(Path(os.environ["HELMSMAN_ENGINES"]) / "sing-box"), "run", "-c", str(file)])
+    xconfig = {"log": {"loglevel": "none"}, "inbounds": [{"listen": "0.0.0.0", "port": 19004, "protocol": "vless", "settings": {"clients": [{"id": UUID}], "decryption": "none"}, "streamSettings": {"network": "xhttp", "security": "none", "xhttpSettings": {"path": "/helmsman", "mode": "packet-up"}}}], "outbounds": [{"protocol": "freedom", "settings": {"finalRules": [{"action": "allow", "ip": ["198.51.100.0/24"]}]}}]}
+    xfile = ROOT / "server-xray.json"
+    xfile.write_text(json.dumps(xconfig))
+    xp = subprocess.Popen([str(Path(os.environ["HELMSMAN_ENGINES"]) / "xray"), "run", "-config", str(xfile)])
     def stop(*_):
         p.terminate()
+        xp.terminate()
         for s in servers:
             s.shutdown()
         sys.exit(0)
     signal.signal(signal.SIGTERM, stop)
     (ROOT / "ready").touch()
     while True:
-        if p.poll() is not None:
+        if p.poll() is not None or xp.poll() is not None:
             raise RuntimeError("Test server engine exited")
         time.sleep(0.2)
 
@@ -162,11 +167,46 @@ def client():
         echo()
         assert Store(store.directory).data["hwid"] == saved_hwid
         print("PASS recovery + saved configuration/HWID", flush=True)
+        xp = parse(f"vless://{UUID}@10.90.0.1:19004?type=xhttp&path=%2Fhelmsman&mode=packet-up")[0]
+        xp["dns"] = "198.51.100.2"
+        state["profiles"].append(xp)
+        # Decky selects the transport; GUI uses the exact same service state.
+        decky.request_service("select", {"profile_id": xp["id"]})
+        time.sleep(0.7)
+        assert runtime.xray_process and runtime.xray_process.poll() is None
+        assert call("status", path=control_path)["selected"] == xp["id"]
+        echo()
+        echo("game.example")
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(5)
+            sock.sendto(b"xhttp-game-udp", ("198.51.100.2", 19003))
+            assert sock.recv(100) == b"xhttp-game-udp"
+        print("PASS XHTTP through actual sing-box TUN, DNS, UDP and shared Decky/GUI API", flush=True)
+        tun_pid, xray_pid = runtime.process.pid, runtime.xray_process.pid
+        runtime.xray_process.kill()
+        runtime.xray_process.wait(timeout=5)
+        assert runtime.status()["state"] == "error"
+        assert runtime.process is None and runtime.xray_process is None
+        try:
+            echo(timeout=2)
+        except OSError:
+            pass
+        else:
+            raise AssertionError("FAIL OPEN after Xray transport crash")
+        assert runtime.guard
+        runtime.start(controller.data, xp)
+        time.sleep(0.7)
+        echo()
+        print("PASS XHTTP sidecar crash stops TUN, retains guard and recovers both engines", flush=True)
     finally:
         decky.request_service("disconnect", {})
         rpc_server.shutdown()
         rpc_server.server_close()
         rpc_thread.join()
+    for pid in (tun_pid, xray_pid):
+        assert not Path(f"/proc/{pid}").exists()
+    assert runtime.xray_process is None
+    assert not (runtime.directory / "active-xray.json").exists()
     assert not Path("/sys/class/net/helmsman0").exists()
     assert subprocess.run(["nft", "list", "table", "inet", "helmsman_guard"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0
     assert "31800" not in subprocess.check_output(["ip", "rule", "show"], text=True)

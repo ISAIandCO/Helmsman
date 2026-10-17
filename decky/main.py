@@ -3,7 +3,7 @@ import asyncio
 import json
 import socket
 
-ALLOWED = {"status", "connect", "disconnect", "select", "preset", "subscriptions_update", "probe"}
+ALLOWED = {"status", "connect", "disconnect", "select", "preset", "subscriptions_update", "probe", "warp_generate"}
 SOCKET = "/run/helmsman/control.sock"
 
 

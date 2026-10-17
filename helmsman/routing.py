@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .common import PRESETS, UserError, identifier, label
 from .dns import bootstrap_address, dns_server
+from .xray import is_xhttp, socks_outbound
 
 RULE_TYPES = {"domain", "domain_suffix", "ip_cidr", "list", "process_name", "process_path", "port"}
 LIST_FIELDS = {"domain", "domain_suffix", "ip_cidr"}
@@ -85,11 +86,11 @@ def text_list(text):
     return source_list({"version": 3, "rules": rules})
 
 
-def compile_config(state, profile, runtime, engine_uid, tun=True):
+def compile_config(state, profile, runtime, engine_uid, tun=True, xray_proxy=None):
     if state["preset"] not in PRESETS:
         raise UserError("Неизвестный сценарий.")
     s = state["settings"]
-    outbound = copy.deepcopy(profile["outbound"])
+    outbound = socks_outbound(xray_proxy) if is_xhttp(profile) else copy.deepcopy(profile["outbound"])
     outbound["tag"] = "proxy"
     endpoint = outbound["type"] in {"wireguard", "openvpn-client"}
     if outbound["type"] == "openvpn-client":

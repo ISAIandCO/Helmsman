@@ -1,14 +1,13 @@
-Первая предварительная версия Helmsman для Steam Deck.
+Helmsman 0.1.0-alpha.2 для Steam Deck.
 
-- Настройка подключений в Desktop Mode и управление через боковое меню Decky Loader.
-- Подписки с настраиваемым HWID, автоматическое обновление и сохранение прежних профилей при ошибке.
-- Системная маршрутизация игр и приложений, полный и выборочные российские сценарии, собственные правила и списки.
-- VLESS/REALITY, Hysteria1/2, WireGuard, AmneziaWG, OpenVPN и другие протоколы; отдельный режим виртуальной LAN ZeroTier.
-- Раздельный DNS через VPN и напрямую: свои DoH/DoT адреса и готовые Cloudflare, Quad9, Google, AdGuard; настраиваемый начальный DNS.
-- Защита от прямого выхода при аварии, восстановление подключения, настройка IPv6/MTU.
+- XHTTP через официальный Xray-core: VLESS/VMess/Trojan, auto/packet-up/stream-up/stream-one, TLS/REALITY, padding/xmux/downloadSettings, TCP и UDP. Сохраняются общий TUN, DNS, правила и защита при обрыве.
+- WARP с маскировкой AmneziaWG: импорт warpgen .conf с I1/junk-параметрами, Reserved и распространённых WireGuard JSON-экспортов.
+- Генератор WARP в Desktop и Decky: AmneziaWG по умолчанию, обычный WireGuard по выбору, свой endpoint, явное согласие с условиями Cloudflare и повторное использование приватной учётной записи.
+- Исправлен импорт .conf с комментариями перед [Interface]. Ключи/токены генератора не выводятся в диагностику.
+- Сохранены раздельные пользовательские DoH/DoT и готовые DNS-провайдеры, подписки/HWID, российские пресеты, ZeroTier и остальные протоколы.
 
-Скачайте архив `linux-x86_64.tar.gz`, проверьте SHA256SUMS, распакуйте и запустите `sudo bash install.sh --decky` в Desktop Mode. Без Decky — `sudo bash install.sh`. Настройка подключения выполняется в меню приложений → Интернет → Helmsman.
+Установка/обновление: скачайте linux-x86_64.tar.gz и SHA256SUMS, проверьте сумму, распакуйте и выполните `sudo bash install.sh --decky` в Desktop Mode. Настройки и аккаунт WARP сохраняются. Для первого подключения откройте Helmsman в меню приложений → Интернет.
 
-Это ранний выпуск. Физический Steam Deck и реальные серверы провайдеров требуют отдельной проверки. Поддерживаемые форматы и ограничения описаны в README и docs/COMPATIBILITY.md. XHTTP, Amnezia API/Gateway, произвольные OpenVPN-скрипты и одновременные туннели не поддерживаются. ZeroTier здесь создаёт виртуальную LAN, обычный интернет идёт напрямую.
+Подробная матрица и проверки — README, docs/COMPATIBILITY.md и docs/TESTING.md. Физический Steam Deck, регистрация/подключение Cloudflare WARP и внешние провайдеры требуют отдельной проверки. MASQUE/Zero Trust enrolment, VLESS encryption, Amnezia API/Gateway и параллельные VPN не реализованы. Генератор может быть недоступен из-за ограничений Cloudflare/сети; готовый профиль можно импортировать.
 
-Архив Decky — только плагин: ему нужен установленный сервис из полного пакета. Архивы source/engine-sources и BUILD.json предназначены для проверки и пересборки; для обычной установки они не требуются.
+Decky zip требует сервис из полного пакета. Архивы source/engine-sources/runtime-sources и BUILD.json содержат соответствующие исходники, лицензии и закрепления сборки.

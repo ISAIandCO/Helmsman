@@ -6,6 +6,9 @@ Helmsman: GPL-3.0-only, см. LICENSE. Компоненты запускаютс
 |---|---|---|
 | SagerNet/sing-box | 1.14.3, 7054cac5124465ffdb145870d7c01885566711b1 | GPL-3.0 с upstream notices; отдельный бинарник, полный vendored source archive |
 | Throne/sing-box | 8b3b24f856bd875b88c27c40a17a8f8fb5e02718 | GPL-3.0, включает закреплённые Throne/wireguard-go и Throne/sing, исходники/уведомления сохраняются |
+| XTLS/Xray-core | 26.10.17, 92ccc939aaf4f8965f369cf0b142e005aeaa11d5, Go 1.27.2 | MPL-2.0; отдельный XHTTP-процесс, полный vendored source archive и уведомления |
+| ViRb3/wgcf | 2.3.1, de6bba7147dc965a1b8e4de113a709750697ccea, Go 1.26.8 | MIT; отдельный генератор WARP, исходники с vendor и лицензиями |
+| ImMALWARE/bash-warp-generator | ec7d940bff52dadd1ca82e05ca8408a4aa3d27ef | MIT; только публичный I1/CPS template, источник в helmsman/warp-obfuscation.json, уведомление packaging/licenses/bash-warp-generator-MIT.txt; scripts не исполняются и ключи пользователя не копируются |
 | ZeroTier Agent | 1.16.2, 899352e38405968516bb12a770f0ac02f6058fa8 | MPL-2.0 для Agent; без nonfree controller, без SSO. Nonfree-код не компилируется и не поставляется в архиве исходников |
 | Qt / PySide6 / Shiboken6 | 6.9.3 | LGPL-3.0/GPL и лицензии Qt-модулей по upstream notices; динамические библиотеки доступны для замены. Используются QtCore/Gui/Widgets/Network; Qt Addons не импортируются |
 | ICU (в составе Qt wheel) | 73.2 | Unicode/ICU license; уведомления `packaging/licenses/ICU-73.2.txt`, [исходники](https://github.com/unicode-org/icu/tree/release-73-2) |

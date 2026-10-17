@@ -20,7 +20,7 @@ def main():
     if stage.exists():
         shutil.rmtree(stage)
     stage.mkdir(parents=True)
-    subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--name", "Helmsman", "--paths", str(ROOT), "packaging/entry.py"], cwd=ROOT, check=True)
+    subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--name", "Helmsman", "--paths", str(ROOT), "--add-data", "helmsman/warp-obfuscation.json:helmsman", "packaging/entry.py"], cwd=ROOT, check=True)
     shutil.copytree(ROOT / "dist" / "Helmsman", stage / "app")
     # QtGui's generic hook also collects PDF and virtual-keyboard plugins.
     # Steam supplies its own keyboard; neither plugin belongs in this app.

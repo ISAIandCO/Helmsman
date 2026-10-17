@@ -13,6 +13,7 @@ from pathlib import Path
 
 from .common import UserError, atomic_json
 from .routing import compile_config
+from .xray import compile_xray, is_xhttp, socks_outbound
 
 
 def run(args, *, input=None, check=True, timeout=15):
@@ -47,6 +48,7 @@ class Runtime:
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chown(self.directory, self.uid, self.gid)
         self.process = None
+        self.xray_process = None
         self.profile = None
         self.guard = False
         self.started = 0
@@ -62,7 +64,20 @@ class Runtime:
             raise UserError("Не установлен движок " + name + ". Переустановите полный пакет Helmsman.")
         return b
 
+    def check_xray(self, profile, state=None):
+        path = self.directory / "check-xray.json"
+        settings = (state or {}).get("settings", {})
+        atomic_json(path, compile_xray(profile, bootstrap=settings.get("dns_bootstrap", "9.9.9.9"), ipv6=settings.get("ipv6", True)))
+        try:
+            run([self.binaries / "xray", "run", "-test", "-config", path], timeout=20)
+        except UserError:
+            raise UserError("Xray отклонил XHTTP-профиль. Проверьте mode, extra, UUID, TLS/REALITY и версию сервера; действующее подключение сохранено.") from None
+        finally:
+            path.unlink(missing_ok=True)
+
     def check(self, config, profile):
+        if is_xhttp(profile):
+            self.check_xray(profile)
         path = self.directory / "check.json"
         atomic_json(path, config)
         try:
@@ -75,7 +90,7 @@ class Runtime:
     def validate_profiles(self, profiles):
         for p in profiles:
             if p["kind"] == "sing-box":
-                o = dict(p["outbound"], tag="proxy")
+                o = dict(socks_outbound() if is_xhttp(p) else p["outbound"], tag="proxy")
                 key = "endpoints" if o["type"] in {"wireguard", "openvpn-client"} else "outbounds"
                 self.check({"log": {"disabled": True}, key: [o], "route": {"default_domain_resolver": "local"}, "dns": {"servers": [{"type": "local", "tag": "local"}]}}, p)
             elif not os.access(self.binaries / "zerotier-one", os.X_OK):
@@ -104,16 +119,25 @@ class Runtime:
             run(["ip", family, "route", "flush", "table", "31800"], check=False)
         run(["ip", "link", "del", "helmsman0"], check=False)
 
+    def stop_process(self, process):
+        if not process:
+            return
+        if process.poll() is None:
+            self.signal_child(signal.SIGTERM, process)
+        try:
+            process.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            self.signal_child(signal.SIGKILL, process)
+            process.wait(timeout=3)
+
     def stop(self):
-        if self.process:
-            if self.process.poll() is None:
-                self.signal_child(signal.SIGTERM)
-            try:
-                self.process.wait(timeout=8)
-            except subprocess.TimeoutExpired:
-                self.signal_child(signal.SIGKILL)
-                self.process.wait(timeout=3)
-            self.process = None
+        # Stop the TUN client before its XHTTP transport. Guard remains armed.
+        self.stop_process(self.process)
+        self.process = None
+        self.stop_process(self.xray_process)
+        self.xray_process = None
+        for name in ("active.json", "active-xray.json"):
+            (self.directory / name).unlink(missing_ok=True)
         if self.profile and self.profile["kind"] == "zerotier":
             # Process is gone; membership file removed so future starts don't join it.
             networks = self.zt_home / "networks.d"
@@ -123,16 +147,17 @@ class Runtime:
         self.cleanup_routes()
         self.profile = None
 
-    def signal_child(self, sig):
+    def signal_child(self, sig, process=None):
+        process = process or self.process
         try:
-            self.process.send_signal(sig)
+            process.send_signal(sig)
         except PermissionError:
             # The root supervisor deliberately has no CAP_KILL. Signal only
             # our tracked child using its reserved engine UID, with no caps.
             # The PID comes from Popen; no RPC parameter can choose a target.
             if not self.profile or self.profile["kind"] != "sing-box":
                 raise UserError("Не удалось остановить дочерний сетевой процесс.") from None
-            run(["setpriv", "--reuid", str(self.uid), "--regid", str(self.gid), "--clear-groups", "--bounding-set=-all", "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs", "kill", "-s", str(int(sig)), "--", str(self.process.pid)], check=False)
+            run(["setpriv", "--reuid", str(self.uid), "--regid", str(self.gid), "--clear-groups", "--bounding-set=-all", "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs", "kill", "-s", str(int(sig)), "--", str(process.pid)], check=False)
 
     def start(self, state, p):
         if p["kind"] == "zerotier":
@@ -140,7 +165,12 @@ class Runtime:
             self.clear_guard()
             self.start_zerotier(p)
             return
-        config = compile_config(state, p, self.directory, self.uid)
+        xray_proxy = None
+        if is_xhttp(p):
+            with socket.socket() as reservation:
+                reservation.bind(("127.0.0.1", 0))
+                xray_proxy = (reservation.getsockname()[1], secrets.token_hex(24))
+        config = compile_config(state, p, self.directory, self.uid, xray_proxy=xray_proxy)
         with socket.socket() as reservation:
             reservation.bind(("127.0.0.1", 0))
             self.probe_port = reservation.getsockname()[1]
@@ -159,8 +189,35 @@ class Runtime:
         config_path = self.directory / "active.json"
         atomic_json(config_path, config)
         os.chown(config_path, self.uid, self.gid)
+        self.profile = p
+        if xray_proxy:
+            path = self.directory / "active-xray.json"
+            atomic_json(path, compile_xray(p, xray_proxy, state["settings"]["dns_bootstrap"], state["settings"]["ipv6"]))
+            os.chown(path, self.uid, self.gid)
+            args = ["setpriv", "--reuid", str(self.uid), "--regid", str(self.gid), "--clear-groups", "--bounding-set=-all", "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs", str(self.binaries / "xray"), "run", "-config", str(path)]
+            try:
+                self.xray_process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": str(self.directory), "LANG": "C.UTF-8"})
+                ready = False
+                for _ in range(40):
+                    if self.xray_process.poll() is not None:
+                        break
+                    try:
+                        with socket.create_connection(("127.0.0.1", xray_proxy[0]), timeout=0.05):
+                            ready = True
+                        break
+                    except OSError:
+                        time.sleep(0.05)
+                if not ready:
+                    raise UserError("Xray не запустил локальный XHTTP-транспорт. Проверьте установку и профиль; защита от прямого выхода сохранена.")
+            except (OSError, UserError):
+                self.stop()
+                raise UserError("Не удалось запустить Xray. Проверьте установку и профиль; защита от прямого выхода сохранена.") from None
         args = ["setpriv", "--reuid", str(self.uid), "--regid", str(self.gid), "--clear-groups", "--no-new-privs", "--inh-caps", "+net_admin,+net_raw", "--ambient-caps", "+net_admin,+net_raw", str(self.binary(p)), "run", "-c", str(config_path)]
-        self.process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": str(self.directory), "LANG": "C.UTF-8"})
+        try:
+            self.process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": str(self.directory), "LANG": "C.UTF-8"})
+        except OSError:
+            self.stop()
+            raise UserError("Не удалось запустить системный движок; защита от прямого выхода сохранена.") from None
         self.profile = p
         self.started = time.monotonic()
         self.last_probe = None
@@ -192,6 +249,11 @@ class Runtime:
             return {"state": "disconnected", "message": "Отключено", "guard": self.guard}
         if self.process.poll() is not None:
             return {"state": "error", "message": f"Сетевой движок завершился (код {self.process.returncode}). Проверьте профиль и доступность TUN.", "guard": self.guard}
+        if self.xray_process and self.xray_process.poll() is not None:
+            # A live TUN client could otherwise continue serving direct rules
+            # after loss of its transport. Stop it while retaining the guard.
+            self.stop()
+            return {"state": "error", "message": "Xray XHTTP завершился. Защита сохранена; сервис повторит подключение.", "guard": self.guard}
         if self.profile["kind"] == "zerotier":
             info = self.zt("info") or {}
             nets = self.zt("listnetworks") or []

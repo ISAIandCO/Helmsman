@@ -18,7 +18,7 @@ for tool in systemctl nft ip setpriv runuser python3 ldd; do
 done
 [[ -c /dev/net/tun ]] || { echo 'Недоступен /dev/net/tun'; exit 1; }
 source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
-[[ -x $source_dir/app/Helmsman && -x $source_dir/app/engines/sing-box && -x $source_dir/app/engines/sing-box-awg && -x $source_dir/app/engines/zerotier-one ]] || { echo 'Нужен полный распакованный архив релиза'; exit 1; }
+[[ -x $source_dir/app/Helmsman && -x $source_dir/app/engines/sing-box && -x $source_dir/app/engines/sing-box-awg && -x $source_dir/app/engines/zerotier-one && -x $source_dir/app/engines/xray && -x $source_dir/app/engines/wgcf ]] || { echo 'Нужен полный распакованный архив релиза'; exit 1; }
 for library in "$source_dir"/app/_internal/libpython*.so* "$source_dir"/app/_internal/PySide6/Qt/lib/libQt6{Core,Gui,Widgets,Network}.so.6 "$source_dir"/app/_internal/PySide6/Qt/plugins/platforms/libqxcb.so "$source_dir"/app/engines/zerotier-one; do
   missing=$(LC_ALL=C ldd "$library" | awk '/not found/{print $1}')
   [[ -z $missing ]] || { echo "Отсутствуют системные библиотеки для $(basename "$library"): $missing"; exit 1; }

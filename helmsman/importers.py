@@ -11,6 +11,7 @@ import zlib
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .common import MAX_BYTES, UserError, identifier, label
+from .xray import compile_xray, import_outbound, is_xhttp
 
 PROTOCOLS = {"vless", "vmess", "trojan", "shadowsocks", "hysteria", "hysteria2", "tuic", "anytls", "socks", "http", "wireguard", "openvpn-client"}
 AWG_KEYS = {k.lower(): k for k in ["Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4", "I1", "I2", "I3", "I4", "I5", "HeaderProtectionKey", "ContentPaddingAddition", "RekeyAfterTime", "RekeyTimeout", "RejectAfterTime", "KeepaliveTimeout", "MaxHandshakeAttempts"]}
@@ -59,7 +60,7 @@ def outbound(raw):
     unknown = set(o) - COMMON_FIELDS - FIELDS[t]
     if unknown:
         raise UserError("Неподдерживаемые поля профиля: " + ", ".join(sorted(unknown)))
-    _no_files(o)
+    _no_files({k: v for k, v in o.items() if k != "transport"} if is_xhttp({"outbound": o}) else o)
     tls = o.get("tls", {})
     if tls.get("insecure") or tls.get("disable_sni"):
         raise UserError("Отключение проверки TLS/SNI не допускается.")
@@ -76,6 +77,8 @@ def outbound(raw):
             if not peer.get("address") or not peer.get("public_key") or not peer.get("allowed_ips"):
                 raise UserError("WireGuard: неполный Peer.")
             _port(peer.get("port"))
+            if "reserved" in peer:
+                peer["reserved"] = reserved_bytes(peer["reserved"])
         if "amnezia_wg" in o and set(o["amnezia_wg"]) - set(AWG_JSON.values()):
             raise UserError("Неизвестные параметры AmneziaWG.")
     elif t == "openvpn-client":
@@ -91,6 +94,8 @@ def outbound(raw):
         if not isinstance(o.get("server"), str) or not o["server"] or any(c.isspace() for c in o["server"]):
             raise UserError("Не задан адрес сервера.")
         _port(o.get("server_port"))
+    if is_xhttp({"outbound": o}):
+        compile_xray({"outbound": o})
     o.pop("tag", None)
     return o
 
@@ -121,6 +126,8 @@ def _tls(q, required=False):
             if not q.get("pbk"):
                 raise UserError("REALITY: не задан публичный ключ.")
             t["reality"] = {"enabled": True, "public_key": q["pbk"], "short_id": q.get("sid", "")}
+            if q.get("spx") and q.get("type") in {"xhttp", "splithttp"}:
+                t["reality"]["spider_x"] = q["spx"]
         if q.get("insecure", q.get("allowInsecure", "0")) in {"1", "true"}:
             raise UserError("Профиль отключает проверку TLS. Исправьте сертификат сервера.")
         return t
@@ -139,16 +146,19 @@ def uri(s):
         return {"id": identifier(), "name": label(unquote(u.fragment) or "ZeroTier"), "kind": "zerotier", "network_id": network.lower()}
     if u.scheme == "vmess":
         v = json.loads(b64(s[8:]).decode())
-        if v.get("net", "tcp") not in {"tcp", "ws", "grpc", "http", "httpupgrade"}:
+        if v.get("net", "tcp") not in {"tcp", "ws", "grpc", "http", "httpupgrade", "xhttp", "splithttp"}:
             raise UserError("VMess: неподдерживаемый транспорт.")
         q = {"type": v.get("net", "tcp"), "path": v.get("path", ""), "host": v.get("host", ""), "security": v.get("tls", "none"), "sni": v.get("sni", "")}
+        for k in ("mode", "extra", "fp", "alpn"):
+            if k in v:
+                q[k] = v[k]
         o = {"type": "vmess", "server": v["add"], "server_port": int(v["port"]), "uuid": v["id"], "security": v.get("scy", "auto"), "alter_id": int(v.get("aid", 0))}
         _transport(o, q)
         if t := _tls(q):
             o["tls"] = t
         return profile(o, v.get("ps", ""))
     q = {k: v[-1] for k, v in parse_qs(u.query, keep_blank_values=True).items()}
-    known = {"security", "type", "sni", "peer", "alpn", "fp", "pbk", "sid", "spx", "flow", "encryption", "path", "host", "serviceName", "mode", "insecure", "allowInsecure", "obfs", "obfs-password", "upmbps", "downmbps", "auth", "protocol", "mport", "ports", "username", "password", "congestion_control", "udp_relay_mode"}
+    known = {"security", "type", "sni", "peer", "alpn", "fp", "pbk", "sid", "spx", "flow", "encryption", "path", "host", "serviceName", "mode", "extra", "insecure", "allowInsecure", "obfs", "obfs-password", "upmbps", "downmbps", "auth", "protocol", "mport", "ports", "username", "password", "congestion_control", "udp_relay_mode"}
     if set(q) - known:
         raise UserError("Параметры ссылки требуют отдельной поддержки: " + ", ".join(sorted(set(q) - known)))
     t = {"hy2": "hysteria2", "ss": "shadowsocks", "socks5": "socks", "https": "http"}.get(u.scheme, u.scheme)
@@ -176,6 +186,8 @@ def uri(s):
             o["obfs"] = q["obfs"]
     elif t in {"trojan", "hysteria2", "anytls", "tuic"}:
         o["password"] = unquote(u.password or "") if t == "tuic" else unquote(u.netloc.rsplit("@", 1)[0])
+        if t == "trojan":
+            _transport(o, q)
         if t == "hysteria2":
             if q.get("obfs"):
                 o["obfs"] = {"type": q["obfs"], "password": q.get("obfs-password", "")}
@@ -199,10 +211,14 @@ def _transport(o, q):
     t = q.get("type", "tcp")
     if t == "tcp":
         return
-    if t not in {"ws", "grpc", "http", "httpupgrade", "quic"}:
-        raise UserError("Транспорт " + t + " пока не поддерживается; используйте TCP/WS/gRPC/HTTPUpgrade.")
+    if t not in {"ws", "grpc", "http", "httpupgrade", "quic", "xhttp", "splithttp"}:
+        raise UserError("Транспорт " + t + " не поддерживается.")
     v = {"type": t}
-    if t == "grpc":
+    if t in {"xhttp", "splithttp"}:
+        v.update(type="xhttp", host=q.get("host", ""), path=q.get("path", "/"), mode=q.get("mode", "auto"))
+        if q.get("extra"):
+            v["extra"] = json.loads(q["extra"]) if isinstance(q["extra"], str) else q["extra"]
+    elif t == "grpc":
         v["service_name"] = q.get("serviceName", q.get("path", ""))
     elif t in {"ws", "http", "httpupgrade"}:
         v["path"] = q.get("path", "/")
@@ -212,6 +228,51 @@ def _transport(o, q):
             else:
                 v["host"] = q["host"].split(",") if t == "http" else q["host"]
     o["transport"] = v
+
+
+def reserved_bytes(value):
+    if isinstance(value, str):
+        value = value.strip()
+        if "," in value or value.startswith("["):
+            value = json.loads(value) if value.startswith("[") else [int(x.strip()) for x in value.split(",")]
+        else:
+            value = list(b64(value))
+    if not isinstance(value, list) or len(value) != 3 or any(type(x) is not int or not 0 <= x <= 255 for x in value):
+        raise UserError("WireGuard Reserved: три байта 0–255 или Base64 из трёх байтов.")
+    return value
+
+
+def wireguard_json(raw):
+    """Normalize wgcf/WARP Xray and legacy sing-box WireGuard exports."""
+    if raw.get("protocol") == "wireguard":
+        from .xray import only
+        only(raw, {"protocol", "tag", "settings"}, "Xray WireGuard")
+        s = raw["settings"]
+        only(s, {"secretKey", "address", "peers", "reserved", "mtu", "workers", "keepAlive", "noKernelTun", "domainStrategy"}, "WireGuard settings")
+        if s.get("noKernelTun") is False:
+            raise UserError("Helmsman использует WireGuard в userspace; удалите noKernelTun=false.")
+        o = {"type": "wireguard", "private_key": s["secretKey"], "address": s["address"], "mtu": s.get("mtu", 1280), "workers": s.get("workers", 2), "peers": []}
+        for p in s["peers"]:
+            only(p, {"publicKey", "preSharedKey", "endpoint", "allowedIPs", "keepAlive", "reserved"}, "WireGuard peer")
+            u = urlsplit("udp://" + p["endpoint"])
+            peer = {"address": u.hostname, "port": u.port, "public_key": p["publicKey"], "allowed_ips": p.get("allowedIPs", ["0.0.0.0/0", "::/0"])}
+            if p.get("preSharedKey"):
+                peer["pre_shared_key"] = p["preSharedKey"]
+            if p.get("keepAlive", s.get("keepAlive")):
+                peer["persistent_keepalive_interval"] = p.get("keepAlive", s.get("keepAlive"))
+            if "reserved" in p or "reserved" in s:
+                peer["reserved"] = reserved_bytes(p.get("reserved", s.get("reserved")))
+            o["peers"].append(peer)
+        return o
+    if raw.get("type") == "wireguard" and "server" in raw:
+        from .xray import only
+        only(raw, {"type", "tag", "server", "server_port", "local_address", "private_key", "peer_public_key", "pre_shared_key", "reserved", "mtu", "workers"}, "Legacy WireGuard")
+        peer = {"address": raw["server"], "port": raw["server_port"], "public_key": raw["peer_public_key"], "allowed_ips": ["0.0.0.0/0", "::/0"]}
+        for k in ("pre_shared_key", "reserved"):
+            if k in raw:
+                peer[k] = raw[k]
+        return {"type": "wireguard", "private_key": raw["private_key"], "address": raw["local_address"], "peers": [peer], "mtu": raw.get("mtu", 1280), "workers": raw.get("workers", 2)}
+    return raw
 
 
 def wireguard(text, name="WireGuard"):
@@ -235,11 +296,11 @@ def wireguard(text, name="WireGuard"):
             current[k] = v.strip()
         else:
             raise UserError("Некорректная строка WireGuard.")
-    if set(interface) - {"privatekey", "address", "dns", "mtu", "listenport"} - AWG_KEYS.keys():
+    if set(interface) - {"privatekey", "address", "dns", "mtu", "listenport", "reserved"} - AWG_KEYS.keys():
         raise UserError("WireGuard: скрипты PostUp/PostDown, Table и неизвестные параметры не поддерживаются.")
     o = {"type": "wireguard", "private_key": interface.get("privatekey", ""), "address": [str(ipaddress.ip_interface(x.strip())) for x in interface.get("address", "").split(",") if x.strip()], "peers": [], "mtu": int(interface.get("mtu", 1280)), "workers": 2}
     for p in peers:
-        if set(p) - {"endpoint", "publickey", "presharedkey", "persistentkeepalive", "allowedips"}:
+        if set(p) - {"endpoint", "publickey", "presharedkey", "persistentkeepalive", "allowedips", "reserved"}:
             raise UserError("WireGuard: неизвестные параметры Peer.")
         u = urlsplit("udp://" + p.get("endpoint", ""))
         peer = {"address": u.hostname, "port": u.port, "public_key": p.get("publickey", ""), "allowed_ips": [str(ipaddress.ip_network(x.strip(), strict=False)) for x in p.get("allowedips", "").split(",") if x.strip()]}
@@ -247,6 +308,8 @@ def wireguard(text, name="WireGuard"):
             peer["pre_shared_key"] = p["presharedkey"]
         if p.get("persistentkeepalive"):
             peer["persistent_keepalive_interval"] = int(p["persistentkeepalive"])
+        if p.get("reserved", interface.get("reserved")):
+            peer["reserved"] = reserved_bytes(p.get("reserved", interface.get("reserved")))
         o["peers"].append(peer)
     awg = {}
     for k, v in interface.items():
@@ -374,7 +437,7 @@ def _amnezia(obj):
 def parse(text, depth=0):
     if depth > 3 or not isinstance(text, str) or len(text.encode()) > MAX_BYTES:
         raise UserError("Слишком большой или вложенный импорт (лимит 8 МиБ).")
-    text = text.strip().lstrip("\ufeff")
+    text = text.lstrip("\ufeff").strip().lstrip("\ufeff")
     if not text:
         raise UserError("Пустой импорт.")
     try:
@@ -387,7 +450,7 @@ def parse(text, depth=0):
             if len(decoded) > MAX_BYTES or not decompressor.eof:
                 raise UserError("Экспорт Amnezia повреждён или слишком велик.")
             return _amnezia(json.loads(decoded))
-        if text.startswith("[Interface]"):
+        if re.match(r"(?:#[^\n]*\n\s*)*\[Interface\]", text):
             return [wireguard(text)]
         if re.search(r"(?m)^\s*(client|remote|dev tun)\b", text):
             return [openvpn(text)]
@@ -398,7 +461,14 @@ def parse(text, depth=0):
             items = obj if isinstance(obj, list) else obj.get("outbounds", obj.get("endpoints", [obj]))
             if isinstance(obj, dict) and "outbounds" in obj and "endpoints" in obj:
                 items = items + obj["endpoints"]
-            results = [profile(x, x.get("tag", "")) for x in items if x.get("type") not in {"direct", "block", "dns", "selector", "urltest"}]
+            results = []
+            for x in items:
+                if x.get("type") in {"direct", "block", "dns", "selector", "urltest"} or x.get("protocol") in {"freedom", "blackhole", "dns"}:
+                    continue
+                normalized = wireguard_json(x)
+                if normalized.get("protocol"):
+                    normalized = import_outbound(normalized)
+                results.append(profile(normalized, x.get("tag", "")))
             if not results:
                 raise UserError("В JSON нет поддерживаемых соединений.")
             return results

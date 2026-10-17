@@ -62,7 +62,7 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(parse("ss://YWVzLTEyOC1nY206c2VjcmV0@127.0.0.1:8388")[0]["outbound"]["password"], "secret")
         self.assertEqual(parse("hy2://secret@127.0.0.1:443?sni=example.com")[0]["outbound"]["type"], "hysteria2")
         self.assertEqual(parse("zerotier://0123456789abcdef")[0]["network_id"], "0123456789abcdef")
-        for bad in (LINK.replace("security=none", "security=reality"), LINK + "&type=xhttp", "zerotier://bad", "", "<html>error</html>"):
+        for bad in (LINK.replace("security=none", "security=reality"), LINK + "&type=unsupported-transport", "zerotier://bad", "", "<html>error</html>"):
             with self.subTest(bad=bad), self.assertRaises(UserError):
                 # Fragment is not a query parameter.
                 parse(bad.replace("#One&", "&"))

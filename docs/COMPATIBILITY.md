@@ -4,7 +4,9 @@
 
 | Протокол / версия | Движок | Транспорт / возможности | Импорт | Ограничения |
 |---|---|---|---|---|
-| VLESS | sing-box 1.14.3 | TCP, TLS, REALITY, Vision, WS, gRPC, HTTP/HTTPUpgrade, QUIC по возможностям движка; XUDP | `vless://`, sing-box outbound JSON | Нет XHTTP, VLESS encryption, TCP HTTP-header camouflage и Xray-specific extra; неизвестные параметры отклоняются |
+| VLESS | sing-box 1.14.3 | TCP, TLS, REALITY, Vision, WS, gRPC, HTTP/HTTPUpgrade, QUIC по возможностям движка; XUDP | `vless://`, sing-box outbound JSON | XHTTP — отдельной строкой ниже; нет VLESS encryption и TCP HTTP-header camouflage; неизвестные параметры отклоняются |
+| VLESS / VMess / Trojan XHTTP | Xray-core 26.10.17 + основной sing-box TUN | XHTTP/splithttp, auto/packet-up/stream-up/stream-one, TLS/REALITY, TCP/UDP; host/path, padding, xmux, отдельный downloadSettings | URI (включая Base64 VMess), нормализованный JSON и native Xray outbound JSON; подписки | Только перечисленные клиентские streamSettings/extra; без импортированных sockopt, файлов, inbounds/API/routing, внешних dialerProxy и отключения TLS-проверки. Vision/XHTTP не взаимозаменяемы: flow должен соответствовать ограничениям Xray/сервера |
+| WARP WireGuard / AmneziaWG | sing-box / Throne endpoint; wgcf 2.3.1 для регистрации | IPv4/IPv6, MTU/keepalive, Reserved, AWG junk/CPS I1–I5; генератор по умолчанию AWG с совместимыми WG-заголовками и нулевым S-паддингом | wgcf/warpgen `.conf`, endpoint JSON, legacy sing-box WG outbound, Xray WG settings; GUI/Decky генератор | Не MASQUE/Zero Trust enrolment. Регистрация/доступность endpoint зависит от Cloudflare и сети; повторно используется локальный account. Отсутствующие allowedIPs в Xray WG означают 0/0 + ::/0; системные hooks не импортируются |
 | VMess | sing-box | TCP, WS/gRPC/HTTP/HTTPUpgrade, TLS | Base64 `vmess://`, JSON | Старые нестандартные URI и обёртки требуют экспорта в JSON |
 | Trojan | sing-box | TLS, TCP/UDP; V2Ray transport через JSON | `trojan://`, JSON | Trojan-Go plugins не запускаются |
 | Shadowsocks | sing-box | AEAD и SS2022, TCP/UDP по методу | SIP002 `ss://`, legacy Base64 URI, JSON | SIP003 плагины не запускаются; 2022-ключ должен иметь правильную длину |
@@ -23,6 +25,6 @@
 
 Все типы профилей используют общий API сервиса. Ошибка запуска, завершение процесса, отказ проверки конфигурации и ошибки подписок показываются без публикации исходных ключей. Статус `running` для интернет-VPN подтверждает процесс/TUN, а не удалённую доступность. Для неё предусмотрена отдельная TCP/TLS-проверка.
 
-Подписки: UTF-8 список URI, Base64 списка URI, массив outbound JSON, sing-box JSON с outbounds/endpoints. Импортируются соединения; маршрутизация, services/inbounds и чужая системная политика не импортируются. Неизвестный узел в подписке отклоняет обновление целиком, чтобы не терять данные молча. Clash YAML, QR-коды и зашифрованные архивы в первой версии не разбираются.
+Подписки: UTF-8 список URI, Base64 списка URI, массив outbound JSON, sing-box/Xray JSON с outbounds/endpoints. Импортируются соединения; маршрутизация, services/inbounds и чужая системная политика не импортируются. Неизвестный узел в подписке отклоняет обновление целиком, чтобы не терять данные молча. Clash YAML, QR-коды и зашифрованные архивы в первой версии не разбираются.
 
-Сочетания: один основной sing-box **или** один AWG sing-box **или** один ZeroTier Agent. Фоновые процессы не запускаются заранее. Пользователь может выбрать любой интернет-профиль для всех VPN-правил; разные VPN-профили в отдельных правилах одновременно пока не поддерживаются.
+Сочетания: один основной sing-box (с одним Xray-процессом для XHTTP) **или** один AWG sing-box **или** один ZeroTier Agent. Фоновые процессы не запускаются заранее. Пользователь может выбрать любой интернет-профиль для всех VPN-правил; разные VPN-профили в отдельных правилах одновременно пока не поддерживаются.

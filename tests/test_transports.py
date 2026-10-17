@@ -63,8 +63,8 @@ class TransportTests(unittest.TestCase):
 
     def exercise(self, kind, transport=None):
         server_port, socks_port = port(), port()
-        binary = Path(ENGINE_DIR) / ("sing-box-awg" if kind == "amneziawg" else "sing-box")
-        t = "wireguard" if kind == "amneziawg" else kind
+        binary = Path(ENGINE_DIR) / ("sing-box-awg" if kind in {"amneziawg", "warp-amneziawg"} else "sing-box")
+        t = "wireguard" if kind in {"amneziawg", "warp-amneziawg"} else kind
         server = {"type": t, "listen": "127.0.0.1", "listen_port": server_port}
         out = {"type": t, "server": "127.0.0.1", "server_port": server_port}
         if t in {"vless", "vmess", "tuic"}:
@@ -109,6 +109,9 @@ class TransportTests(unittest.TestCase):
             if kind == "amneziawg":
                 obfs = {"jc": 2, "jmin": 40, "jmax": 80, "s1": 16, "s2": 16, "s3": 8, "s4": 4, "h1": "123", "h2": "456", "h3": "789", "h4": "987"}
                 server["amnezia_wg"] = out["amnezia_wg"] = obfs
+            if kind == "warp-amneziawg":
+                template = json.loads((Path(__file__).resolve().parents[1] / "helmsman/warp-obfuscation.json").read_text())
+                out["amnezia_wg"] = template["amnezia_wg"]
             endpoints = [server]
         server_config = {"log": {"level": "debug"}, "inbounds": [] if endpoints else [server], "endpoints": endpoints, "outbounds": [{"type": "direct", "tag": "direct"}], "route": {"final": "direct"}}
         wake_port = port() if kind == "amneziawg" else None
@@ -134,7 +137,8 @@ class TransportTests(unittest.TestCase):
                 file.write_text(json.dumps(config))
                 log = open(self.root / (name + ".log"), "w+")
                 logs.append(log)
-                procs.append(subprocess.Popen([str(binary), "run", "-c", str(file)], stdout=log, stderr=log))
+                executable = Path(ENGINE_DIR) / "sing-box" if name == "server" and kind == "warp-amneziawg" else binary
+                procs.append(subprocess.Popen([str(executable), "run", "-c", str(file)], stdout=log, stderr=log))
             last = None
             deadline = time.monotonic() + 25
             for _ in range(250):
@@ -188,6 +192,7 @@ class TransportTests(unittest.TestCase):
     def test_anytls(self): self.exercise("anytls")
     def test_wireguard(self): self.exercise("wireguard")
     def test_amneziawg(self): self.exercise("amneziawg")
+    def test_warp_amneziawg_to_standard_wireguard(self): self.exercise("warp-amneziawg")
     def test_openvpn(self): self.exercise("openvpn-client")
 
 

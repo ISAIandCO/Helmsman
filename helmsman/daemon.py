@@ -18,6 +18,9 @@ from .importers import parse
 from .routing import compile_config, rule, source_list, text_list
 from .subscriptions import download, https_url, update, validate_subscription
 from .system import Runtime, network_signature
+from .warp import generate as generate_warp
+from .xray import is_xhttp
+from .subscriptions import fingerprint
 
 RU_LISTS = {
     "ru-blocked": ("Россия: домены из общественных списков", "rule-set-geosite/geosite-ru-blocked.srs"),
@@ -59,7 +62,7 @@ class Controller:
         if self.last_error:
             s["error"] = self.last_error
         return {**s, "version": VERSION, "selected": self.data["selected"], "desired": self.data["desired"], "preset": self.data["preset"], "presets": PRESETS,
-                "profiles": [{"id": p["id"], "name": p["name"], "protocol": "zerotier" if p["kind"] == "zerotier" else "amneziawg" if p["outbound"].get("amnezia_wg") else p["outbound"]["type"]} for p in self.data["profiles"]],
+                "profiles": [{"id": p["id"], "name": p["name"], "protocol": "zerotier" if p["kind"] == "zerotier" else "amneziawg" if p["outbound"].get("amnezia_wg") else p["outbound"]["type"] + ("/xhttp" if is_xhttp(p) else "")} for p in self.data["profiles"]],
                 "subscriptions": [{k: s[k] for k in ("id", "name", "last_update", "error") if k in s} for s in self.data["subscriptions"]]}
 
     def selected(self, state=None):
@@ -144,7 +147,7 @@ class Controller:
             if method == "configuration":
                 return copy.deepcopy(self.data)
             if method == "diagnostics":
-                return {"status": self.status(), "events": list(self.events), "tun_available": Path("/dev/net/tun").exists(), "engines": {n: os.access(self.runtime.binaries / n, os.X_OK) for n in ("sing-box", "sing-box-awg", "zerotier-one")}}
+                return {"status": self.status(), "events": list(self.events), "tun_available": Path("/dev/net/tun").exists(), "engines": {n: os.access(self.runtime.binaries / n, os.X_OK) for n in ("sing-box", "sing-box-awg", "zerotier-one", "xray", "wgcf")}}
             if method == "connect":
                 candidate = copy.deepcopy(self.data)
                 if params.get("profile_id"):
@@ -182,6 +185,19 @@ class Controller:
                     candidate["selected"] = profiles[0]["id"]
                 self.commit(candidate)
                 return {"imported": len(profiles), "profiles": [p["id"] for p in profiles]}
+            elif method == "warp_generate":
+                p = generate_warp(self.runtime.binaries, self.store.directory, params.get("accept_terms"), params.get("mode", "awg"), params.get("endpoint", ""))
+                self.runtime.validate_profiles([p])
+                existing = next((x for x in self.data["profiles"] if fingerprint(x) == fingerprint(p)), None)
+                if existing:
+                    return {"id": existing["id"], "message": "Профиль WARP уже добавлен. Выберите его в списке подключений."}
+                candidate = copy.deepcopy(self.data)
+                candidate["profiles"].append(p)
+                if not candidate["selected"]:
+                    candidate["selected"] = p["id"]
+                self.commit(candidate)
+                self.event("Профиль WARP создан из сохранённой учётной записи.")
+                return {"id": p["id"], "message": "Cloudflare WARP добавлен. Выберите профиль и нажмите «Подключить»."}
             elif method == "profile_rename":
                 candidate = copy.deepcopy(self.data)
                 p = next((p for p in candidate["profiles"] if p["id"] == params["id"]), None)

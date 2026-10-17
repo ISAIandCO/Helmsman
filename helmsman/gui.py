@@ -10,6 +10,8 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDialog, QDia
 from .common import MAX_BYTES, PRESETS, UserError, VERSION
 from .dns import DNS_PRESETS, resolver_url
 from .rpc import call
+from .warp import TERMS
+from .xray import is_xhttp
 
 
 class Request(QThread):
@@ -246,6 +248,7 @@ class Window(QMainWindow):
         button("Изменить", self.edit_profile, row)
         button("Удалить", lambda: self.delete_selected("profile_delete", self.profiles), row)
         l.addLayout(row)
+        button("Создать / восстановить WARP", self.generate_warp, l)
         button("Добавить сеть ZeroTier", self.add_zerotier, l)
 
     def selected_item(self, widget, kind):
@@ -262,7 +265,7 @@ class Window(QMainWindow):
 
     def import_profiles(self):
         text = area()
-        text.setPlaceholderText("Вставьте ссылку, список ссылок, sing-box JSON, WireGuard/AmneziaWG .conf, автономный OpenVPN .ovpn или клиентский vpn:// экспорт Amnezia.")
+        text.setPlaceholderText("Вставьте ссылку, список ссылок, sing-box/Xray XHTTP JSON, WARP/WireGuard/AmneziaWG .conf, автономный OpenVPN .ovpn или клиентский vpn:// экспорт Amnezia.")
         d = Form("Добавить подключения", {"text": ("Конфигурация", text)}, self)
         def load():
             path, _ = QFileDialog.getOpenFileName(d, "Импортировать", "", "Конфигурации (*.conf *.ovpn *.json *.txt);;Все файлы (*)")
@@ -286,6 +289,23 @@ class Window(QMainWindow):
         d = Form("Изменить профиль", {"name": ("Название", name), "dns": ("DNS внутри VPN (IP, необязательно)", dns), "text": ("Параметры подключения", config)}, self)
         if d.exec() == QDialog.Accepted:
             self.mutate("profile_save", {"id": p["id"], "name": name.text(), "dns": dns.text(), "text": config.toPlainText()})
+
+    def generate_warp(self):
+        info = QLabel("Создаёт WARP через wgcf. По умолчанию — AmneziaWG с I1 и junk-пакетами, как в конфигурациях warpgen. Ключи и учётная запись сохраняются локально; повторный запуск использует ту же учётную запись. Регистрация обращается к Cloudflare и может быть ограничена сервисом.")
+        info.setWordWrap(True)
+        terms = QLabel('<a href="' + TERMS + '">Условия Cloudflare</a>')
+        terms.setOpenExternalLinks(True)
+        consent = QCheckBox("Я принимаю условия Cloudflare для регистрации WARP")
+        mode = combo({"awg": "AmneziaWG (с маскировкой)", "wireguard": "WireGuard (обычный)"})
+        endpoint = line("")
+        endpoint.setPlaceholderText("Необязательно: адрес:порт или [IPv6]:порт")
+        d = Form("Cloudflare WARP", {"info": ("", info), "mode": ("Режим", mode), "endpoint": ("Свой endpoint", endpoint), "terms": ("", terms), "consent": ("", consent)}, self)
+        save = d.findChild(QDialogButtonBox).button(QDialogButtonBox.Save)
+        save.setText("Создать профиль")
+        save.setEnabled(False)
+        consent.toggled.connect(save.setEnabled)
+        if d.exec() == QDialog.Accepted:
+            self.request("warp_generate", {"accept_terms": consent.isChecked(), "mode": mode.currentData(), "endpoint": endpoint.text()}, lambda result: (self.refresh(), QMessageBox.information(self, "WARP", result["message"])))
 
     def add_zerotier(self):
         value, ok = QInputDialog.getText(self, "ZeroTier", "Network ID (16 символов):")
@@ -473,7 +493,7 @@ class Window(QMainWindow):
         self.setting_widgets["default_action"] = w
         l.addLayout(form)
         button("Сохранить и применить", self.save_settings, l)
-        button("О программе и лицензиях", lambda: QMessageBox.information(self, "Helmsman", f"Helmsman {VERSION}\nGPL-3.0-only, без гарантий. Исходники и лицензии компонентов включены в архив релиза.\nСетевые движки: SagerNet/sing-box, Throne/sing-box и ZeroTier Agent (MPL-2.0, без nonfree controller).\nhttps://github.com/ISAIandCO/Helmsman"), l)
+        button("О программе и лицензиях", lambda: QMessageBox.information(self, "Helmsman", f"Helmsman {VERSION}\nGPL-3.0-only, без гарантий. Исходники и лицензии компонентов включены в архив релиза.\nСетевые движки: SagerNet/sing-box, Throne/sing-box, Xray-core, wgcf и ZeroTier Agent (MPL-2.0, без nonfree controller).\nhttps://github.com/ISAIandCO/Helmsman"), l)
         l.addStretch()
 
     def save_settings(self):
@@ -494,7 +514,7 @@ class Window(QMainWindow):
         self.profiles.clear()
         self.profile_picker.clear()
         for p in config["profiles"]:
-            t = "ZeroTier" if p["kind"] == "zerotier" else "AmneziaWG" if p["outbound"].get("amnezia_wg") else p["outbound"]["type"]
+            t = "ZeroTier" if p["kind"] == "zerotier" else "AmneziaWG" if p["outbound"].get("amnezia_wg") else p["outbound"]["type"] + ("/xhttp" if is_xhttp(p) else "")
             self.profiles.addItem(p["name"] + " · " + t)
             self.profile_picker.addItem(p["name"] + " · " + t, p["id"])
         self.profile_picker.setCurrentIndex(self.profile_picker.findData(config["selected"]))
