@@ -31,7 +31,7 @@ class StorageTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def mount(self, path, size):
-        result = subprocess.run(['mount', '-t', 'tmpfs', '-o', f'size={size}', 'tmpfs', str(path)], capture_output=True)
+        result = subprocess.run(['mount', '-t', 'tmpfs', '-o', f'size={size},mode=0755', 'tmpfs', str(path)], capture_output=True)
         if result.returncode:
             if os.environ.get('HELMSMAN_CI'):
                 self.fail('CI must allow the actual limited-filesystem regression: ' + result.stderr.decode())
