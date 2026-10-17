@@ -97,8 +97,11 @@ runuser -u "$target_user" -- install -m 0644 "$source_dir/packaging/helmsman.des
 runuser -u "$target_user" -- ln -sfn /opt/helmsman/current/Helmsman "$target_home/.local/bin/helmsman"
 if ((decky)); then
   [[ -d $target_home/homebrew/plugins ]] || { echo 'Приложение установлено. Сначала установите Decky Loader, затем повторите с --decky.'; exit 1; }
-  runuser -u "$target_user" -- mkdir -p "$target_home/homebrew/plugins/helmsman"
-  runuser -u "$target_user" -- cp -R -- "$source_dir/decky/." "$target_home/homebrew/plugins/helmsman/"
+  # Decky manages this directory as root; only our plugin is modified.
+  install -d -m 0755 "$target_home/homebrew/plugins/helmsman"
+  cp -R -- "$source_dir/decky/." "$target_home/homebrew/plugins/helmsman/"
+  chown -R root:root "$target_home/homebrew/plugins/helmsman"
+  chmod -R u=rwX,go=rX "$target_home/homebrew/plugins/helmsman"
   systemctl try-restart plugin_loader.service || true
 fi
 echo 'Helmsman установлен. Откройте его в меню приложений → Интернет. Настройки сохранены.'

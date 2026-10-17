@@ -1,6 +1,7 @@
 """Install/update/uninstall idle packaged service on the disposable CI runner."""
 import json
 import os
+import runpy
 import subprocess
 import time
 from pathlib import Path
@@ -25,8 +26,31 @@ subprocess.run(["stat", "-c", "%U:%G %a %n", "/opt"], check=True)
 subprocess.run(["sudo", "chown", "root:root", "/opt"], check=True)
 subprocess.run(["sudo", "chmod", "0755", "/opt"], check=True)
 
+# Exercise the real --decky path with a root-owned, non-writable parent,
+# matching the protected plugins directory reported on Steam Deck.
+plugins = Path.home() / 'homebrew/plugins'
+plugin = plugins / 'helmsman'
+other_plugin = plugins / 'unrelated-fixture'
+subprocess.run(["sudo", "install", "-d", "-o", "root", "-g", "root", "-m", "0755", str(plugins), str(other_plugin)], check=True)
+assert not os.access(plugins, os.W_OK)
+subprocess.run(["sudo", "touch", str(other_plugin / 'keep')], check=True)
+
+
+def check_plugin():
+    for name in ('plugin.json', 'main.py', 'package.json', 'dist/index.js'):
+        path = plugin / name
+        assert path.is_file() and os.access(path, os.R_OK)
+        assert path.stat().st_uid == 0
+        assert not path.stat().st_mode & 0o022
+    assert json.loads((plugin / 'plugin.json').read_text())['flags'] == []
+    assert (other_plugin / 'keep').exists()
+    backend = runpy.run_path(str(plugin / 'main.py'))
+    assert backend['request_service']('status', {})['state'] == rpc('status')['state']
+
+
 try:
-    subprocess.run(["sudo", "bash", str(stage / "install.sh"), "--user", user], check=True)
+    subprocess.run(["sudo", "bash", str(stage / "install.sh"), "--user", user, "--decky"], check=True)
+    check_plugin()
     rpc("import", {"text": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:9?type=xhttp&mode=packet-up#Installed-fixture"})
     rpc("settings_save", {"settings": {"dns_proxy": "tls://dns.google", "dns_direct": "https://dns.quad9.net/dns-query"}})
     before = config()
@@ -37,7 +61,8 @@ account.parent.mkdir(mode=0o700,exist_ok=True)
 account.write_text('test-only-account')
 account.chmod(0o600)
 """], check=True)
-    subprocess.run(["sudo", "bash", str(stage / "install.sh"), "--user", user], check=True)
+    subprocess.run(["sudo", "bash", str(stage / "install.sh"), "--user", user, "--decky"], check=True)
+    check_plugin()
     after = config()
     assert before["hwid"] == after["hwid"]
     assert before["profiles"] == after["profiles"]
@@ -83,12 +108,19 @@ for name in ('/opt/helmsman','/opt/helmsman/state'):
     subprocess.run([binary, "--smoke-test"], check=True, timeout=15, env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
     subprocess.run(["sudo", "bash", str(stage / "uninstall.sh"), "--user", user], check=True)
     assert not Path('/opt/helmsman/current').exists()
-    subprocess.run(["sudo", "bash", str(stage / "install.sh"), "--user", user], check=True)
+    assert not plugin.exists()
+    assert (other_plugin / 'keep').exists()
+    subprocess.run(["sudo", "bash", str(stage / "install.sh"), "--user", user, "--decky"], check=True)
+    check_plugin()
     assert config()["hwid"] == before["hwid"]
     assert config()["profiles"] == before["profiles"]
     print("PASS packaged systemd service, unprivileged RPC/GUI, update and reinstall persistence")
 finally:
     subprocess.run(["sudo", "bash", str(stage / "uninstall.sh"), "--user", user, "--purge"], check=True)
+assert not plugin.exists()
+assert (other_plugin / "keep").exists()
+subprocess.run(["sudo", "rm", "-rf", str(other_plugin)], check=True)
 assert not Path("/opt/helmsman").exists()
 assert not Path("/etc/systemd/system/helmsman.service").exists()
+print("PASS --decky install/update/uninstall with protected parent, readable unprivileged backend and unrelated plugin preserved")
 print("PASS packaged uninstall")

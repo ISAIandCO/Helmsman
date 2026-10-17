@@ -43,7 +43,7 @@ rm -f /etc/systemd/system/helmsman.service /etc/systemd/system/helmsman-guard.se
 systemctl daemon-reload
 target_home=$(getent passwd "$target_user" | cut -d: -f6)
 runuser -u "$target_user" -- rm -f -- "$target_home/.local/share/applications/helmsman.desktop" "$target_home/.local/bin/helmsman"
-runuser -u "$target_user" -- rm -rf -- "$target_home/homebrew/plugins/helmsman"
+rm -rf -- "$target_home/homebrew/plugins/helmsman"
 systemctl try-restart plugin_loader.service || true
 rm -rf -- /opt/helmsman/versions /opt/helmsman/current /opt/helmsman/current.new /opt/helmsman/current.rollback /var/lib/helmsman-app
 if ((purge)); then
