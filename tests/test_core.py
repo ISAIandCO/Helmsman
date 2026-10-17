@@ -144,11 +144,12 @@ class CoreTests(unittest.TestCase):
         state["rules"] = [rule({"type": "domain_suffix", "values": [".пример.рф"], "action": "direct"}), rule({"type": "ip_cidr", "values": ["203.0.113.1"], "action": "proxy"})]
         config = compile_config(state, p, "/tmp", 999)
         r = config["route"]["rules"]
-        self.assertLess(next(i for i,x in enumerate(r) if x.get("action") == "resolve"), next(i for i,x in enumerate(r) if "ip_cidr" in x))
+        self.assertLess(next(i for i,x in enumerate(r) if x.get("action") == "resolve"), next(i for i,x in enumerate(r) if x.get("ip_cidr") == ["203.0.113.1/32"]))
         self.assertEqual(r[-1], {"action": "reject"})
         self.assertEqual(config["dns"]["rules"][-1], {"action": "reject"})
         self.assertEqual(config["inbounds"][0]["exclude_uid"], [999])
         self.assertTrue(config["inbounds"][0]["strict_route"])
+        self.assertLess(next(i for i,x in enumerate(r) if x.get("port") == [5353, 5355]), next(i for i,x in enumerate(r) if x.get("action") == "hijack-dns"))
         self.assertEqual(config["dns"]["servers"][2]["detour"], "proxy")
         self.assertEqual(text_list("example.com\n203.0.113.0/24")["rules"][1]["ip_cidr"], ["203.0.113.0/24"])
         original = copy.deepcopy(state["rules"])

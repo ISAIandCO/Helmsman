@@ -115,6 +115,12 @@ def compile_config(state, profile, runtime, engine_uid, tun=True):
         if outbound["type"] in {"wireguard", "openvpn-client"}:
             settings["inbounds"][0]["mtu"] = min(s["mtu"], outbound.get("mtu", 1280 if outbound["type"] == "wireguard" else 1500))
     r = settings["route"]["rules"]
+    if s["lan"]:
+        # mDNS/LLMNR use DNS wire format too. Preserve local discovery before
+        # protocol sniffing, otherwise hijack-dns can swallow Remote Play LAN.
+        multicast = ["224.0.0.0/4", "255.255.255.255/32"] + (["ff00::/8"] if s["ipv6"] else [])
+        r.extend([{"ip_cidr": multicast, "outbound": "direct"},
+                  {"ip_is_private": True, "port": [5353, 5355], **({} if s["ipv6"] else {"ip_version": 4}), "outbound": "direct"}])
     r.extend([{"action": "sniff", "timeout": "200ms"}, {"protocol": "dns", "action": "hijack-dns"}, {"port": 53, "action": "hijack-dns"}])
     if not s["ipv6"]:
         r.append({"ip_version": 6, "action": "reject"})

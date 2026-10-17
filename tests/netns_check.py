@@ -51,7 +51,7 @@ class DNS(socketserver.BaseRequestHandler):
 def server():
     ROOT.mkdir(mode=0o711, exist_ok=True)
     os.chmod(ROOT, 0o711)
-    servers = [socketserver.ThreadingTCPServer(("0.0.0.0", 19002), TCP), socketserver.ThreadingUDPServer(("0.0.0.0", 19003), UDP), socketserver.ThreadingUDPServer(("0.0.0.0", 53), DNS)]
+    servers = [socketserver.ThreadingTCPServer(("0.0.0.0", 19002), TCP), socketserver.ThreadingUDPServer(("0.0.0.0", 19003), UDP), socketserver.ThreadingUDPServer(("0.0.0.0", 53), DNS), socketserver.ThreadingUDPServer(("0.0.0.0", 5353), UDP)]
     for s in servers:
         s.daemon_threads = True
         threading.Thread(target=s.serve_forever, daemon=True).start()
@@ -124,6 +124,15 @@ def client():
         print("PASS real UDP through VLESS/TUN", flush=True)
         echo("game.example")
         print("PASS DNS interception + FakeIP + remote resolution", flush=True)
+        call("settings_save", {"settings": {"lan": True}}, control_path)
+        time.sleep(0.3)
+        query = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x04game\x07example\x00\x00\x01\x00\x01"
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(3)
+            s.sendto(query, ("10.90.0.1", 5353))
+            assert s.recv(256) == query
+        print("PASS LAN DNS-format discovery on port 5353 is not hijacked", flush=True)
+        call("settings_save", {"settings": {"lan": False}}, control_path)
         imported_list = call("list_save", {"name": "Test blocked IP set", "format": "text", "content": "198.51.100.3/32"}, control_path)
         state = controller.data
         state["rules"] = [rule({"type": "domain_suffix", "values": ["blocked.example"], "action": "block"}), rule({"type": "list", "values": [imported_list["id"]], "action": "block"})]
