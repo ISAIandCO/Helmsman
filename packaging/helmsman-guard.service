@@ -1,0 +1,15 @@
+[Unit]
+Description=Helmsman early boot traffic guard
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target NetworkManager.service systemd-networkd.service helmsman.service
+Wants=network-pre.target
+RequiresMountsFor=/var/lib/helmsman /var/lib/helmsman-app
+
+[Service]
+Type=oneshot
+ExecStart=/var/lib/helmsman-app/current/Helmsman guard
+RemainAfterExit=yes
+
+[Install]
+WantedBy=sysinit.target

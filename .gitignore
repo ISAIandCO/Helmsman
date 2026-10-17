@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+build/
+dist/
+*.egg-info/
+node_modules/
+decky/dist/
+.cache/
+*.spec
+test-results/

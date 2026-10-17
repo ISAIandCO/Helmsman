@@ -1,0 +1,10 @@
+{
+  "name": "Helmsman",
+  "author": "ISAIandCO",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": ["network", "vpn"],
+    "description": "Управление Helmsman в Game Mode: профили, подключение, маршрутизация и подписки."
+  }
+}
