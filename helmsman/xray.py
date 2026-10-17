@@ -22,7 +22,7 @@ def mux_settings(value):
     for key in ("concurrency", "xudpConcurrency"):
         if key in value and (type(value[key]) is not int or not -32768 <= value[key] <= 32767):
             raise UserError("Xray mux: concurrency/xudpConcurrency должны быть целыми int16.")
-    if value.get("xudpProxyUDP443", "reject") not in {"reject", "allow", "skip"}:
+    if value.get("xudpProxyUDP443", "reject") not in {"", "reject", "allow", "skip"}:
         raise UserError("Xray mux xudpProxyUDP443: reject, allow или skip.")
     return copy.deepcopy(value)
 

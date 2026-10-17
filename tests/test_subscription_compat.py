@@ -109,7 +109,7 @@ class SubscriptionCompatibilityTests(unittest.TestCase):
             self.assertEqual(restored['profiles'], result['profiles'])
 
     def test_mux_import_preserves_native_parameters_and_shared_policy(self):
-        for mux in ({'enabled': True}, {'enabled': True, 'concurrency': -1, 'xudpConcurrency': 16, 'xudpProxyUDP443': 'allow'}, {'enabled': False, 'xudpProxyUDP443': 'skip'}):
+        for mux in ({'enabled': True}, {'enabled': True, 'xudpProxyUDP443': ''}, {'enabled': True, 'concurrency': -1, 'xudpConcurrency': 16, 'xudpProxyUDP443': 'allow'}, {'enabled': False, 'xudpProxyUDP443': 'skip'}):
             for network in ('tcp', 'ws', 'grpc', 'xhttp'):
                 with self.subTest(network=network, mux=mux):
                     source = xray_config(network)
