@@ -208,16 +208,16 @@ class Runtime:
                     except OSError:
                         time.sleep(0.05)
                 if not ready:
-                    raise UserError("Xray не запустил локальный XHTTP-транспорт. Проверьте установку и профиль; защита от прямого выхода сохранена.")
+                    raise UserError("Xray не запустил локальный XHTTP-транспорт. Проверьте установку и профиль.")
             except (OSError, UserError):
                 self.stop()
-                raise UserError("Не удалось запустить Xray. Проверьте установку и профиль; защита от прямого выхода сохранена.") from None
+                raise UserError("Не удалось запустить Xray. Проверьте установку и профиль.") from None
         args = ["setpriv", "--reuid", str(self.uid), "--regid", str(self.gid), "--clear-groups", "--no-new-privs", "--inh-caps", "+net_admin,+net_raw", "--ambient-caps", "+net_admin,+net_raw", str(self.binary(p)), "run", "-c", str(config_path)]
         try:
             self.process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": str(self.directory), "LANG": "C.UTF-8"})
         except OSError:
             self.stop()
-            raise UserError("Не удалось запустить системный движок; защита от прямого выхода сохранена.") from None
+            raise UserError("Не удалось запустить системный движок.") from None
         self.profile = p
         self.started = time.monotonic()
         self.last_probe = None
@@ -253,7 +253,7 @@ class Runtime:
             # A live TUN client could otherwise continue serving direct rules
             # after loss of its transport. Stop it while retaining the guard.
             self.stop()
-            return {"state": "error", "message": "Xray XHTTP завершился. Защита сохранена; сервис повторит подключение.", "guard": self.guard}
+            return {"state": "error", "message": "Xray XHTTP завершился. Сервис повторит подключение.", "guard": self.guard}
         if self.profile["kind"] == "zerotier":
             info = self.zt("info") or {}
             nets = self.zt("listnetworks") or []
