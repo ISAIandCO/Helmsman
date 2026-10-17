@@ -13,12 +13,16 @@ done
 [[ $target_user != root && $target_user =~ ^[a-z_][a-z0-9_-]*\$?$ ]] || { echo 'Укажите обычного пользователя через --user'; exit 1; }
 target_uid=$(id -u "$target_user")
 target_home=$(getent passwd "$target_user" | cut -d: -f6)
-for tool in systemctl nft ip setpriv runuser python3; do
+for tool in systemctl nft ip setpriv runuser python3 ldd; do
   command -v "$tool" >/dev/null || { echo "Отсутствует системный компонент: $tool"; exit 1; }
 done
 [[ -c /dev/net/tun ]] || { echo 'Недоступен /dev/net/tun'; exit 1; }
 source_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 [[ -x $source_dir/app/Helmsman && -x $source_dir/app/engines/sing-box && -x $source_dir/app/engines/sing-box-awg && -x $source_dir/app/engines/zerotier-one ]] || { echo 'Нужен полный распакованный архив релиза'; exit 1; }
+for library in "$source_dir"/app/_internal/libpython*.so* "$source_dir"/app/_internal/PySide6/Qt/lib/libQt6{Core,Gui,Widgets,Network}.so.6 "$source_dir"/app/_internal/PySide6/Qt/plugins/platforms/libqxcb.so "$source_dir"/app/engines/zerotier-one; do
+  missing=$(LC_ALL=C ldd "$library" | awk '/not found/{print $1}')
+  [[ -z $missing ]] || { echo "Отсутствуют системные библиотеки для $(basename "$library"): $missing"; exit 1; }
+done
 version=$(cat "$source_dir/VERSION")
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-z0-9.]+)?$ ]] || exit 1
 id helmsman-engine &>/dev/null || useradd --system --no-create-home --shell /usr/bin/nologin helmsman-engine

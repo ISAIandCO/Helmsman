@@ -42,9 +42,9 @@ def main():
             run(["go", "build", "-mod=vendor", "-buildvcs=false", "-trimpath", "-tags", spec["tags"], "-ldflags", "-s -w -checklinkname=0 -X github.com/sagernet/sing-box/constant.Version=" + spec["version"], "-o", str(OUT / name), "./cmd/sing-box"], source, env)
         else:
             # MPL agent only; never compile/distribute the nonfree controller.
-            # Keep glibc dynamic: static glibc + host NSS/systemd modules can
-            # crash during account lookup. C++ runtime remains self-contained.
-            run(["make", "-j2", "ZT_NONFREE=0", "ZT_SSO_SUPPORTED=0", "ZT_STATIC=0", "LDFLAGS=-static-libstdc++ -static-libgcc", "zerotier-one"], source)
+            # Use the host C/C++ runtime, as Qt does. Static glibc + host NSS
+            # modules can crash during account lookup; keep normal PIE linking.
+            run(["make", "-j2", "ZT_NONFREE=0", "ZT_SSO_SUPPORTED=0", "ZT_STATIC=0", "LDFLAGS=-pie -Wl,-z,relro,-z,now", "zerotier-one"], source)
             shutil.copy2(source / "zerotier-one", OUT / "zerotier-one")
         (source / "HELMSMAN-REVISION.json").write_text(json.dumps(spec, indent=2))
     link = OUT / "zerotier-cli"

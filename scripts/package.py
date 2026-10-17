@@ -25,6 +25,12 @@ def main():
     # QtGui's generic hook also collects PDF and virtual-keyboard plugins.
     # Steam supplies its own keyboard; neither plugin belongs in this app.
     internal = stage / "app/_internal"
+    # Host desktop/system libraries belong to SteamOS, not our distribution.
+    # Keep the bundled Python/Qt/ICU runtimes; avoid copying Ubuntu GTK, GLib,
+    # systemd, crypto and X11 libraries (and their platform-specific versions).
+    for path in internal.glob("*.so*"):
+        if not path.name.startswith("libpython") and not path.is_symlink():
+            path.unlink()
     for path in internal.rglob("*"):
         if path.is_file() and (path.name in {"libqpdf.so", "libqtvirtualkeyboardplugin.so"} or any(path.name.startswith("libQt6" + n) for n in ("Pdf", "Qml", "Quick", "VirtualKeyboard"))):
             path.unlink()
@@ -45,6 +51,7 @@ def main():
     # original licensing notices from every bundled source/dependency.
     licenses = stage / "app" / "licenses"
     licenses.mkdir()
+    shutil.copytree(ROOT / "packaging/licenses", licenses / "runtime-notices")
     for path in (ROOT / "build" / "sources").rglob("*"):
         if path.is_file() and path.name.lower().startswith(("license", "copying", "notice")) and ".git" not in path.parts and "nonfree" not in path.parts:
             target = licenses / path.relative_to(ROOT / "build" / "sources")

@@ -4,6 +4,7 @@ import ipaddress
 import os
 import pwd
 import secrets
+import signal
 import socket
 import ssl
 import subprocess
@@ -105,11 +106,12 @@ class Runtime:
 
     def stop(self):
         if self.process:
-            self.process.terminate() if self.process.poll() is None else None
+            if self.process.poll() is None:
+                self.signal_child(signal.SIGTERM)
             try:
                 self.process.wait(timeout=8)
             except subprocess.TimeoutExpired:
-                self.process.kill()
+                self.signal_child(signal.SIGKILL)
                 self.process.wait(timeout=3)
             self.process = None
         if self.profile and self.profile["kind"] == "zerotier":
@@ -120,6 +122,17 @@ class Runtime:
                     f.unlink()
         self.cleanup_routes()
         self.profile = None
+
+    def signal_child(self, sig):
+        try:
+            self.process.send_signal(sig)
+        except PermissionError:
+            # The root supervisor deliberately has no CAP_KILL. Signal only
+            # our tracked child using its reserved engine UID, with no caps.
+            # The PID comes from Popen; no RPC parameter can choose a target.
+            if not self.profile or self.profile["kind"] != "sing-box":
+                raise UserError("Не удалось остановить дочерний сетевой процесс.") from None
+            run(["setpriv", "--reuid", str(self.uid), "--regid", str(self.gid), "--clear-groups", "--bounding-set=-all", "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs", "kill", "-s", str(int(sig)), "--", str(self.process.pid)], check=False)
 
     def start(self, state, p):
         if p["kind"] == "zerotier":
