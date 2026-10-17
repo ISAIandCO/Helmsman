@@ -11,13 +11,13 @@ import zlib
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .common import MAX_BYTES, UserError, identifier, label
-from .xray import compile_xray, import_outbound, is_xhttp
+from .xray import compile_xray, import_outbound, is_xhttp, uses_xray, mux_settings
 
 PROTOCOLS = {"vless", "vmess", "trojan", "shadowsocks", "hysteria", "hysteria2", "tuic", "anytls", "socks", "http", "wireguard", "openvpn-client"}
 AWG_KEYS = {k.lower(): k for k in ["Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4", "I1", "I2", "I3", "I4", "I5", "HeaderProtectionKey", "ContentPaddingAddition", "RekeyAfterTime", "RekeyTimeout", "RejectAfterTime", "KeepaliveTimeout", "MaxHandshakeAttempts"]}
 AWG_JSON = {k: re.sub(r"(?<!^)(?=[A-Z])", "_", v).lower() for k, v in AWG_KEYS.items()}
 AWG_JSON.update({k: k for k in AWG_KEYS if len(k) <= 4})
-COMMON_FIELDS = {"type", "tag", "server", "server_port", "tls", "transport", "multiplex", "network", "connect_timeout", "tcp_fast_open", "udp_fragment"}
+COMMON_FIELDS = {"type", "tag", "server", "server_port", "tls", "transport", "multiplex", "network", "connect_timeout", "tcp_fast_open", "udp_fragment", "xray_mux"}
 FIELDS = {
     "vless": {"uuid", "flow", "packet_encoding"},
     "vmess": {"uuid", "security", "alter_id", "global_padding", "authenticated_length", "packet_encoding"},
@@ -94,7 +94,9 @@ def outbound(raw):
         if not isinstance(o.get("server"), str) or not o["server"] or any(c.isspace() for c in o["server"]):
             raise UserError("Не задан адрес сервера.")
         _port(o.get("server_port"))
-    if is_xhttp({"outbound": o}):
+    if "xray_mux" in o:
+        o["xray_mux"] = mux_settings(o["xray_mux"])
+    if uses_xray({"outbound": o}):
         compile_xray({"outbound": o})
     o.pop("tag", None)
     return o

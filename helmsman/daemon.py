@@ -62,7 +62,7 @@ class Controller:
         if self.last_error:
             s["error"] = self.last_error
         return {**s, "version": VERSION, "selected": self.data["selected"], "desired": self.data["desired"], "preset": self.data["preset"], "presets": PRESETS,
-                "profiles": [{"id": p["id"], "name": p["name"], "protocol": "zerotier" if p["kind"] == "zerotier" else "amneziawg" if p["outbound"].get("amnezia_wg") else p["outbound"]["type"] + ("/xhttp" if is_xhttp(p) else "")} for p in self.data["profiles"]],
+                "profiles": [{"id": p["id"], "name": p["name"], "protocol": "zerotier" if p["kind"] == "zerotier" else "amneziawg" if p["outbound"].get("amnezia_wg") else p["outbound"]["type"] + ("/xhttp" if is_xhttp(p) else "") + ("/mux" if 'xray_mux' in p['outbound'] else '')} for p in self.data["profiles"]],
                 "subscriptions": [{k: s[k] for k in ("id", "name", "last_update", "error") if k in s} for s in self.data["subscriptions"]]}
 
     def selected(self, state=None):

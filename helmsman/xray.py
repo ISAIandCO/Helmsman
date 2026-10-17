@@ -1,4 +1,4 @@
-"""Bounded XHTTP connection data; system policy always belongs to sing-box."""
+"""Bounded Xray XHTTP/mux connection data; system policy belongs to sing-box."""
 import copy
 from .common import UserError
 
@@ -8,6 +8,23 @@ XMUX_FIELDS = set("maxConcurrency maxConnections cMaxReuseTimes hMaxRequestTimes
 
 def is_xhttp(profile):
     return profile.get("outbound", {}).get("transport", {}).get("type") in {"xhttp", "splithttp"}
+
+
+def uses_xray(profile):
+    o = profile.get("outbound", {})
+    return is_xhttp(profile) or "xray_mux" in o
+
+
+def mux_settings(value):
+    only(value, {"enabled", "concurrency", "xudpConcurrency", "xudpProxyUDP443"}, "Xray mux")
+    if "enabled" in value and type(value["enabled"]) is not bool:
+        raise UserError("Xray mux enabled должен быть логическим.")
+    for key in ("concurrency", "xudpConcurrency"):
+        if key in value and (type(value[key]) is not int or not -32768 <= value[key] <= 32767):
+            raise UserError("Xray mux: concurrency/xudpConcurrency должны быть целыми int16.")
+    if value.get("xudpProxyUDP443", "reject") not in {"reject", "allow", "skip"}:
+        raise UserError("Xray mux xudpProxyUDP443: reject, allow или skip.")
+    return copy.deepcopy(value)
 
 
 def only(value, fields, name):
@@ -50,16 +67,36 @@ def xhttp_settings(value, depth=0):
 
 
 def stream_settings(outbound):
-    t = outbound["transport"]
-    only(t, {"type", "host", "path", "mode", "extra"} | EXTRA_FIELDS, "Транспорт XHTTP")
-    stream = {"network": "xhttp", "security": "none", "xhttpSettings": xhttp_settings({k: v for k, v in t.items() if k != "type"})}
+    t = outbound.get("transport", {})
+    network = t.get("type", "tcp")
+    if network in {"xhttp", "splithttp"}:
+        only(t, {"type", "host", "path", "mode", "extra"} | EXTRA_FIELDS, "Транспорт XHTTP")
+        stream = {"network": "xhttp", "security": "none", "xhttpSettings": xhttp_settings({k: v for k, v in t.items() if k != "type"})}
+    else:
+        stream = {"network": network, "security": "none"}
+        if network == "tcp":
+            only(t, {"type"}, "Транспорт TCP Xray")
+        elif network == "ws":
+            only(t, {"type", "path", "headers", "max_early_data", "early_data_header_name"}, "Транспорт WS Xray")
+            stream["wsSettings"] = {"path": t.get("path", "/"), "headers": t.get("headers", {})}
+            for source, target in (("max_early_data", "maxEarlyData"), ("early_data_header_name", "earlyDataHeaderName")):
+                if source in t:
+                    stream["wsSettings"][target] = t[source]
+        elif network == "grpc":
+            only(t, {"type", "service_name"}, "Транспорт gRPC Xray")
+            stream["grpcSettings"] = {"serviceName": t.get("service_name", "")}
+        elif network in {"http", "httpupgrade"}:
+            only(t, {"type", "path", "host"}, "Транспорт HTTP Xray")
+            stream["httpSettings" if network == "http" else "httpupgradeSettings"] = {"path": t.get("path", "/"), "host": t.get("host", [] if network == "http" else "")}
+        else:
+            raise UserError("Транспорт профиля Xray mux пока не поддерживается.")
     tls = outbound.get("tls", {})
-    only(tls, {"enabled", "server_name", "alpn", "utls", "reality"}, "TLS XHTTP")
-    only(tls.get("utls", {}), {"enabled", "fingerprint"}, "uTLS XHTTP")
+    only(tls, {"enabled", "server_name", "alpn", "utls", "reality"}, "TLS Xray")
+    only(tls.get("utls", {}), {"enabled", "fingerprint"}, "uTLS Xray")
     if tls.get("enabled"):
         reality = tls.get("reality", {})
         if reality.get("enabled"):
-            only(reality, {"enabled", "public_key", "short_id", "spider_x", "mldsa65_verify"}, "REALITY XHTTP")
+            only(reality, {"enabled", "public_key", "short_id", "spider_x", "mldsa65_verify"}, "REALITY Xray")
             stream["security"] = "reality"
             stream["realitySettings"] = {"serverName": tls.get("server_name", outbound["server"]), "fingerprint": tls.get("utls", {}).get("fingerprint", "chrome"), "publicKey": reality["public_key"], "shortId": reality.get("short_id", ""), "spiderX": reality.get("spider_x", "")}
             if reality.get("mldsa65_verify"):
@@ -82,9 +119,12 @@ def socks_outbound(proxy=None):
 def compile_xray(profile, proxy=None, bootstrap="9.9.9.9", ipv6=True):
     o = profile["outbound"]
     if o["type"] not in {"vless", "vmess", "trojan"}:
-        raise UserError("XHTTP поддерживается для VLESS, VMess и Trojan.")
+        raise UserError("Xray поддерживается для VLESS, VMess и Trojan.")
     if any(k in o for k in ("multiplex", "network", "connect_timeout", "tcp_fast_open", "udp_fragment")) or o.get("packet_encoding", "xudp") != "xudp":
-        raise UserError("XHTTP: используйте параметры extra/xmux; параметры транспорта sing-box здесь не применяются.")
+        raise UserError("Xray: параметры multiplex/network/socket sing-box не переносятся; используйте Xray mux или XHTTP extra/xmux.")
+    mux = mux_settings(o['xray_mux']) if 'xray_mux' in o else None
+    if mux and mux.get('enabled') and mux.get('concurrency', 0) >= 0 and (is_xhttp(profile) or o.get('flow', '').startswith('xtls-rprx-vision')):
+        raise UserError('Xray: TCP Mux.Cool несовместим с XHTTP/Vision. В конфигурации провайдера нужен mux.concurrency=-1 или mux.enabled=false; XUDP можно сохранить. Параметры не изменены автоматически.')
     port, password = proxy or (1081, "check-only")
     if o["type"] == "trojan":
         settings = {"servers": [{"address": o["server"], "port": o["server_port"], "password": o["password"]}]}
@@ -101,17 +141,19 @@ def compile_xray(profile, proxy=None, bootstrap="9.9.9.9", ipv6=True):
         settings = {"vnext": [{"address": o["server"], "port": o["server_port"], "users": [user]}]}
     stream = stream_settings(o)
     stream["sockopt"] = {"domainStrategy": "UseIP" if ipv6 else "UseIPv4", "penetrate": True}
+    outbound = {"tag": "proxy", "protocol": o["type"], "settings": settings, "streamSettings": stream}
+    if mux is not None:
+        outbound["mux"] = mux
     return {"log": {"loglevel": "none", "access": "none", "error": "none"},
             "dns": {"servers": [bootstrap], "queryStrategy": "UseIP" if ipv6 else "UseIPv4"},
             "inbounds": [{"listen": "127.0.0.1", "port": port, "protocol": "socks", "settings": {"auth": "password", "accounts": [{"user": "helmsman", "pass": password}], "udp": True, "ip": "127.0.0.1"}}],
-            "outbounds": [{"tag": "proxy", "protocol": o["type"], "settings": settings, "streamSettings": stream}]}
+            "outbounds": [outbound]}
 
 
 def import_outbound(raw):
     """Import one native Xray outbound, excluding routing, APIs and file paths."""
     only(raw, {"protocol", "tag", "settings", "streamSettings", "mux"}, "Xray outbound")
-    if raw.get("mux", {}).get("enabled"):
-        raise UserError("Xray JSON: включённый mux пока не переносится; выберите URI/Base64.")
+    mux = mux_settings(raw["mux"]) if "mux" in raw else None
     t = raw["protocol"]
     if t not in {"vless", "vmess", "trojan"}:
         raise UserError("Нативный Xray JSON: нужен VLESS, VMess, Trojan или WireGuard.")
@@ -180,9 +222,11 @@ def import_outbound(raw):
             tls["utls"] = {"enabled": True, "fingerprint": nt.get("fingerprint", "chrome")}
         if security == "reality":
             tls["reality"] = {"enabled": True, "public_key": nt.get("publicKey", nt.get("password", "")), "short_id": nt.get("shortId", "")}
-            if network in {"xhttp", "splithttp"}:
+            if network in {"xhttp", "splithttp"} or mux is not None:
                 tls["reality"]["spider_x"] = nt.get("spiderX", "")
             if nt.get("mldsa65Verify"):
                 tls["reality"]["mldsa65_verify"] = nt["mldsa65Verify"]
         o["tls"] = tls
+    if mux is not None and (mux.get("enabled") or set(mux) - {"enabled"}):
+        o["xray_mux"] = mux
     return o

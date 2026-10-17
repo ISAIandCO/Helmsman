@@ -1,4 +1,4 @@
-"""Actual Xray client/server TCP and UDP over XHTTP, no provider account."""
+"""Actual Xray client/server TCP and UDP over XHTTP and mux, no provider account."""
 import json
 import os
 import re
@@ -75,7 +75,7 @@ class XhttpTransportTests(unittest.TestCase):
             s.server_close()
         cls.tmp.cleanup()
 
-    def exercise(self, mode, kind="vless", download=False, reality=False):
+    def exercise(self, mode, kind="vless", download=False, reality=False, network="xhttp", mux=None):
         server_port, client_port = port(), port()
         binary = str(Path(ENGINES) / "xray")
         settings = {"clients": [{"id": UUID}], "decryption": "none"}
@@ -89,6 +89,24 @@ class XhttpTransportTests(unittest.TestCase):
         if download:
             o["transport"]["extra"] = {"downloadSettings": {"address": "download.fixture", "port": server_port, "network": "xhttp", "security": "tls", "tlsSettings": {"serverName": "localhost", "alpn": ["h2"], "useSystemCA": True}, "xhttpSettings": {"path": "/helmsman", "mode": mode}}}
         server = {"log": {"loglevel": "debug"}, "inbounds": [{"listen": "127.0.0.1", "port": server_port, "protocol": kind, "settings": settings, "streamSettings": {"network": "xhttp", "xhttpSettings": {"path": "/helmsman", "mode": mode}, "security": "tls", "tlsSettings": {"alpn": ["h2", "http/1.1"], "certificates": [{"certificateFile": str(self.root / "cert"), "keyFile": str(self.root / "key")}]}}}], "outbounds": [{"protocol": "freedom", "settings": {"finalRules": [{"action": "allow", "ip": ["127.0.0.1/32"]}]}}]}
+        if network != 'xhttp':
+            stream = server['inbounds'][0]['streamSettings']
+            stream.pop('xhttpSettings')
+            stream['network'] = network
+            o.pop('transport')
+            if network == 'ws':
+                stream['wsSettings'] = {'path': '/helmsman'}
+                o['transport'] = {'type': 'ws', 'path': '/helmsman'}
+                o['tls']['alpn'] = ['http/1.1']
+            if network == 'grpc':
+                stream['grpcSettings'] = {'serviceName': 'helmsman'}
+                o['transport'] = {'type': 'grpc', 'service_name': 'helmsman'}
+            if network == 'httpupgrade':
+                stream['httpupgradeSettings'] = {'path': '/helmsman'}
+                o['transport'] = {'type': 'httpupgrade', 'path': '/helmsman'}
+                o['tls']['alpn'] = ['http/1.1']
+        if mux is not None:
+            o['xray_mux'] = mux
         if reality:
             keys = subprocess.check_output([binary, "x25519"], text=True)
             private = re.search(r"PrivateKey: (\S+)", keys).group(1)
@@ -98,7 +116,7 @@ class XhttpTransportTests(unittest.TestCase):
             target = json.loads(json.dumps(server["inbounds"][0]))
             target["port"] = target_port
             target["streamSettings"]["network"] = "raw"
-            target["streamSettings"].pop("xhttpSettings")
+            target["streamSettings"].pop("xhttpSettings", None)
             server["inbounds"].append(target)
             stream = server["inbounds"][0]["streamSettings"]
             stream.pop("tlsSettings")
@@ -106,6 +124,8 @@ class XhttpTransportTests(unittest.TestCase):
             stream["realitySettings"] = {"target": "127.0.0.1:" + str(target_port), "serverNames": ["localhost"], "privateKey": private, "shortIds": ["1234"]}
             o["tls"] = {"enabled": True, "server_name": "localhost", "utls": {"enabled": True, "fingerprint": "chrome"}, "reality": {"enabled": True, "public_key": public, "short_id": "1234"}}
         client = compile_xray(profile(o), (client_port, "test"))
+        if mux is not None:
+            self.assertEqual(client['outbounds'][0]['mux'], mux)
         client["log"] = {"loglevel": "debug"}
         if download:
             client["dns"]["hosts"] = {"download.fixture": "127.0.0.1"}
@@ -126,6 +146,17 @@ class XhttpTransportTests(unittest.TestCase):
                         s.sendall(b"xhttp-real-tcp")
                         self.assertEqual(receive(s, 14), b"xhttp-real-tcp")
                     udp_echo(client_port, self.udp.server_address[1])
+                    if mux is not None:
+                        streams = []
+                        try:
+                            for i in range(3):
+                                streams.append(socks_connect(client_port, 'helmsman', 'test', '127.0.0.1', self.tcp.server_address[1]))
+                                streams[-1].sendall(b'parallel-mux')
+                            for stream in streams:
+                                self.assertEqual(receive(stream, 12), b'parallel-mux')
+                        finally:
+                            for stream in streams:
+                                stream.close()
                     # The sidecar's TCP listener requires credentials.
                     with self.assertRaises(UserError):
                         socks_connect(client_port, "helmsman", "wrong", "127.0.0.1", self.tcp.server_address[1])
@@ -166,3 +197,16 @@ class XhttpTransportTests(unittest.TestCase):
         for kind in ("vmess", "trojan"):
             with self.subTest(kind=kind):
                 self.exercise("packet-up", kind)
+
+    def test_native_mux_tcp_ws_grpc_httpupgrade_tcp_and_udp(self):
+        for kind in ('vless', 'vmess', 'trojan'):
+            for network in ('tcp', 'ws', 'grpc', 'httpupgrade'):
+                with self.subTest(kind=kind, network=network):
+                    self.exercise('auto', kind, network=network, mux={'enabled': True, 'concurrency': 8, 'xudpConcurrency': 8, 'xudpProxyUDP443': 'skip'})
+
+    def test_native_mux_reality_and_xhttp(self):
+        self.exercise('auto', network='tcp', reality=True, mux={'enabled': True, 'concurrency': 8})
+        self.exercise('packet-up', mux={'enabled': True, 'concurrency': -1, 'xudpConcurrency': 8})
+
+    def test_native_xudp_without_tcp_mux(self):
+        self.exercise('auto', network='tcp', mux={'enabled': True, 'concurrency': -1, 'xudpConcurrency': 8, 'xudpProxyUDP443': 'allow'})

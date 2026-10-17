@@ -4,6 +4,7 @@ import zipfile
 import os
 import subprocess
 import tempfile
+import sys
 from pathlib import Path
 
 root = Path("dist/release")
@@ -21,6 +22,7 @@ with tarfile.open(app) as archive:
         subprocess.run([str(binary), "ctl", "--help"], check=True, stdout=subprocess.DEVNULL)
         subprocess.run([str(binary), "--smoke-test"], check=True, timeout=15, env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
         subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1280x800x24", str(binary), "--smoke-test"], check=True, timeout=20, env={**os.environ, "QT_QPA_PLATFORM": "xcb"})
+        subprocess.run([sys.executable, 'scripts/check-wayland.py', str(binary)], check=True, timeout=30)
 with zipfile.ZipFile(next(root.glob("helmsman-decky-*.zip"))) as archive:
     for name in ("helmsman/plugin.json", "helmsman/main.py", "helmsman/dist/index.js"):
         assert name in archive.namelist(), name

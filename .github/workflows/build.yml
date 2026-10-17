@@ -36,7 +36,7 @@ jobs:
       - name: System build and test tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y libegl1 libxkbcommon0 libxcb-cursor0 nftables iproute2 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xkb1 xvfb
+          sudo apt-get install -y libegl1 libwayland-egl1 libxkbcommon0 libxcb-cursor0 nftables iproute2 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xkb1 xvfb weston
           python -m pip install '.[gui,build]'
       - uses: actions/cache/restore@v4
         id: engines

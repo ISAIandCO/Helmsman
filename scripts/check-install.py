@@ -51,7 +51,10 @@ def check_plugin():
 try:
     subprocess.run(["sudo", "bash", str(stage / "install.sh"), "--user", user, "--decky"], check=True)
     check_plugin()
-    rpc("import", {"text": "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:9?type=xhttp&mode=packet-up#Installed-fixture"})
+    rpc("import", {"text": json.dumps({'remarks': 'Installed mux fixture', 'outbounds': [{'protocol': 'vless',
+        'settings': {'vnext': [{'address': '127.0.0.1', 'port': 9, 'users': [{'id': '00000000-0000-0000-0000-000000000001', 'encryption': 'none'}]}]},
+        'streamSettings': {'network': 'tcp', 'security': 'none'},
+        'mux': {'enabled': True, 'concurrency': 8, 'xudpConcurrency': 8, 'xudpProxyUDP443': 'skip'}}]})})
     rpc("settings_save", {"settings": {"dns_proxy": "tls://dns.google", "dns_direct": "https://dns.quad9.net/dns-query"}})
     before = config()
     subprocess.run(["sudo", "python3", "-c", """
@@ -99,7 +102,7 @@ for name in ('/opt/helmsman','/opt/helmsman/state'):
         assert subprocess.run(["sudo", "test", "-f", "/opt/helmsman/state/runtime/active-xray.json"]).returncode == 0
         assert Path("/sys/class/net/helmsman0").exists()
         assert subprocess.run(["sudo", "nft", "list", "table", "inet", "helmsman_guard"], stdout=subprocess.DEVNULL).returncode == 0
-        print("PASS installed frozen daemon creates TUN and crash guard under systemd restrictions")
+        print("PASS installed frozen daemon starts native Xray mux sidecar, TUN and crash guard under systemd restrictions")
     finally:
         rpc("disconnect")
     assert not Path("/sys/class/net/helmsman0").exists()

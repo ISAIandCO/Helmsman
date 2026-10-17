@@ -60,6 +60,8 @@ def server():
     file.write_text(json.dumps(config))
     p = subprocess.Popen([str(Path(os.environ["HELMSMAN_ENGINES"]) / "sing-box"), "run", "-c", str(file)])
     xconfig = {"log": {"loglevel": "none"}, "inbounds": [{"listen": "0.0.0.0", "port": 19004, "protocol": "vless", "settings": {"clients": [{"id": UUID}], "decryption": "none"}, "streamSettings": {"network": "xhttp", "security": "none", "xhttpSettings": {"path": "/helmsman", "mode": "packet-up"}}}], "outbounds": [{"protocol": "freedom", "settings": {"finalRules": [{"action": "allow", "ip": ["198.51.100.0/24"]}]}}]}
+    xconfig['inbounds'].append({'listen': '0.0.0.0', 'port': 19005, 'protocol': 'vless',
+        'settings': {'clients': [{'id': UUID}], 'decryption': 'none'}, 'streamSettings': {'network': 'tcp', 'security': 'none'}})
     xfile = ROOT / "server-xray.json"
     xfile.write_text(json.dumps(xconfig))
     xp = subprocess.Popen([str(Path(os.environ["HELMSMAN_ENGINES"]) / "xray"), "run", "-config", str(xfile)])
@@ -198,6 +200,35 @@ def client():
         time.sleep(0.7)
         echo()
         print("PASS XHTTP sidecar crash stops TUN, retains guard and recovers both engines", flush=True)
+        mp = parse(json.dumps({'outbounds': [{'protocol': 'vless',
+            'settings': {'vnext': [{'address': '10.90.0.1', 'port': 19005, 'users': [{'id': UUID, 'encryption': 'none'}]}]},
+            'streamSettings': {'network': 'tcp', 'security': 'none'},
+            'mux': {'enabled': True, 'concurrency': 8, 'xudpConcurrency': 8, 'xudpProxyUDP443': 'skip'}}]}))[0]
+        mp['dns'] = '198.51.100.2'
+        controller.data['profiles'].append(mp)
+        decky.request_service('select', {'profile_id': mp['id']})
+        time.sleep(0.7)
+        assert runtime.xray_process and runtime.xray_process.poll() is None
+        assert call('status', path=control_path)['selected'] == mp['id']
+        echo(); echo('game.example')
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(5)
+            sock.sendto(b'mux-game-udp', ('198.51.100.2', 19003))
+            assert sock.recv(100) == b'mux-game-udp'
+        tun_pid, xray_pid = runtime.process.pid, runtime.xray_process.pid
+        runtime.xray_process.kill(); runtime.xray_process.wait(timeout=5)
+        assert runtime.status()['state'] == 'error'
+        assert runtime.process is None and runtime.guard
+        try:
+            echo(timeout=2)
+        except OSError:
+            pass
+        else:
+            raise AssertionError('FAIL OPEN after mux sidecar crash')
+        runtime.start(controller.data, mp)
+        time.sleep(0.7)
+        echo()
+        print('PASS native mux TUN/DNS/UDP, shared API, fail-closed sidecar crash and recovery', flush=True)
     finally:
         decky.request_service("disconnect", {})
         rpc_server.shutdown()

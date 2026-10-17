@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .common import UserError, atomic_json
 from .routing import compile_config
-from .xray import compile_xray, is_xhttp, socks_outbound
+from .xray import compile_xray, uses_xray, socks_outbound
 
 
 def run(args, *, input=None, check=True, timeout=15):
@@ -71,12 +71,12 @@ class Runtime:
         try:
             run([self.binaries / "xray", "run", "-test", "-config", path], timeout=20)
         except UserError:
-            raise UserError("Xray отклонил XHTTP-профиль. Проверьте mode, extra, UUID, TLS/REALITY и версию сервера; действующее подключение сохранено.") from None
+            raise UserError("Xray отклонил профиль. Проверьте mux, транспорт, UUID, TLS/REALITY и версию сервера; действующее подключение сохранено.") from None
         finally:
             path.unlink(missing_ok=True)
 
     def check(self, config, profile):
-        if is_xhttp(profile):
+        if uses_xray(profile):
             self.check_xray(profile)
         path = self.directory / "check.json"
         atomic_json(path, config)
@@ -90,7 +90,7 @@ class Runtime:
     def validate_profiles(self, profiles):
         for p in profiles:
             if p["kind"] == "sing-box":
-                o = dict(socks_outbound() if is_xhttp(p) else p["outbound"], tag="proxy")
+                o = dict(socks_outbound() if uses_xray(p) else p["outbound"], tag="proxy")
                 key = "endpoints" if o["type"] in {"wireguard", "openvpn-client"} else "outbounds"
                 self.check({"log": {"disabled": True}, key: [o], "route": {"default_domain_resolver": "local"}, "dns": {"servers": [{"type": "local", "tag": "local"}]}}, p)
             elif not os.access(self.binaries / "zerotier-one", os.X_OK):
@@ -166,7 +166,7 @@ class Runtime:
             self.start_zerotier(p)
             return
         xray_proxy = None
-        if is_xhttp(p):
+        if uses_xray(p):
             with socket.socket() as reservation:
                 reservation.bind(("127.0.0.1", 0))
                 xray_proxy = (reservation.getsockname()[1], secrets.token_hex(24))
