@@ -3,16 +3,15 @@ Description=Helmsman connection service
 After=helmsman-guard.service network.target
 Requires=helmsman-guard.service
 StartLimitIntervalSec=0
+RequiresMountsFor=/opt/helmsman
 
 [Service]
 Type=simple
-ExecStart=/var/lib/helmsman-app/current/Helmsman daemon --owner-uid @UID@
+ExecStart=/opt/helmsman/current/Helmsman daemon --owner-uid @UID@
 Restart=always
 RestartSec=5
 TimeoutStopSec=20
 KillMode=control-group
-StateDirectory=helmsman
-StateDirectoryMode=0711
 RuntimeDirectory=helmsman
 RuntimeDirectoryMode=0751
 UMask=0077
@@ -29,7 +28,7 @@ RestrictRealtime=yes
 RestrictNamespaces=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK AF_PACKET
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SETUID CAP_SETGID CAP_SETPCAP CAP_CHOWN CAP_DAC_OVERRIDE
-ReadWritePaths=/var/lib/helmsman /run/helmsman
+ReadWritePaths=/opt/helmsman/state /run/helmsman
 DevicePolicy=closed
 DeviceAllow=/dev/net/tun rw
 MemoryMax=512M

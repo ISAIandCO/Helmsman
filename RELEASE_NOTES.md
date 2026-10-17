@@ -1,13 +1,10 @@
-Helmsman 0.1.0-alpha.2 для Steam Deck.
+Helmsman 0.1.0-alpha.3 для Steam Deck.
 
-- XHTTP через официальный Xray-core: VLESS/VMess/Trojan, auto/packet-up/stream-up/stream-one, TLS/REALITY, padding/xmux/downloadSettings, TCP и UDP. Сохраняются общий TUN, DNS, правила и защита при обрыве.
-- WARP с маскировкой AmneziaWG: импорт warpgen .conf с I1/junk-параметрами, Reserved и распространённых WireGuard JSON-экспортов.
-- Генератор WARP в Desktop и Decky: AmneziaWG по умолчанию, обычный WireGuard по выбору, свой endpoint, явное согласие с условиями Cloudflare и повторное использование приватной учётной записи.
-- Исправлен импорт .conf с комментариями перед [Interface]. Ключи/токены генератора не выводятся в диагностику.
-- Сохранены раздельные пользовательские DoH/DoT и готовые DNS-провайдеры, подписки/HWID, российские пресеты, ZeroTier и остальные протоколы.
+- Исправлена ошибка «No space left on device» при установке на маленький раздел /var SteamOS. Программа и приватное состояние размещены прямо в /opt/helmsman и /opt/helmsman/state, без ссылок совместимости из /var. Отключать защиту rootfs не требуется.
+- Установщик проверяет свободное место перед остановкой службы, очищает незавершённое копирование и сохраняет работающую версию при ошибке копирования. Обновление сохраняет настройки, HWID и аккаунт WARP. Каталоги принадлежат root; служба не имеет доступа к домашним каталогам.
+- Остатки программы alpha.2 в /var/lib/helmsman-app удаляются после успешного запуска. Настройки alpha.2 из /var/lib/helmsman автоматически не переносятся и оставлены для ручного восстановления; новая схема начинает работу отключённой. При полностью заполненном /var сначала выполните sudo rm -rf -- /var/lib/helmsman-app.
+- Сохранены XHTTP через Xray, WARP/AmneziaWG и генератор Desktop/Decky, раздельные DoH/DoT с готовыми провайдерами и остальные функции alpha.2.
 
-Установка/обновление: скачайте linux-x86_64.tar.gz и SHA256SUMS, проверьте сумму, распакуйте и выполните `sudo bash install.sh --decky` в Desktop Mode. Настройки и аккаунт WARP сохраняются. Для первого подключения откройте Helmsman в меню приложений → Интернет.
+Установка: скачайте linux-x86_64.tar.gz и SHA256SUMS, проверьте сумму, распакуйте и выполните sudo bash install.sh --decky в Desktop Mode. Без Decky — sudo bash install.sh. Откройте Helmsman в меню приложений → Интернет.
 
-Подробная матрица и проверки — README, docs/COMPATIBILITY.md и docs/TESTING.md. Физический Steam Deck, регистрация/подключение Cloudflare WARP и внешние провайдеры требуют отдельной проверки. MASQUE/Zero Trust enrolment, VLESS encryption, Amnezia API/Gateway и параллельные VPN не реализованы. Генератор может быть недоступен из-за ограничений Cloudflare/сети; готовый профиль можно импортировать.
-
-Decky zip требует сервис из полного пакета. Архивы source/engine-sources/runtime-sources и BUILD.json содержат соответствующие исходники, лицензии и закрепления сборки.
+CI проверяет ограниченные файловые системы, пакетную установку systemd, обновление/переустановку с сохранением настроек, TUN/DNS/UDP, правила, crash guard и локальные протокольные серверы. Физический Steam Deck, регистрация/handshake Cloudflare WARP и внешние провайдеры требуют проверки на устройстве; шаги приведены в docs/TESTING.md. Decky zip требует сервис из полного пакета.

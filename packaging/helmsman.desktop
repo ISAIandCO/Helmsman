@@ -2,7 +2,7 @@
 Type=Application
 Name=Helmsman
 Comment=VPN и виртуальные сети для Steam Deck
-Exec=/var/lib/helmsman-app/current/Helmsman
+Exec=/opt/helmsman/current/Helmsman
 Icon=network-vpn
 Categories=Network;
 Terminal=false

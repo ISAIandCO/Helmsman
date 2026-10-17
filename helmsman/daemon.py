@@ -416,8 +416,8 @@ class Server(socketserver.ThreadingUnixStreamServer):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", default="/var/lib/helmsman")
-    parser.add_argument("--binaries", default="/var/lib/helmsman-app/current/engines")
+    parser.add_argument("--data", default="/opt/helmsman/state")
+    parser.add_argument("--binaries", default="/opt/helmsman/current/engines")
     parser.add_argument("--socket", default=SOCKET)
     parser.add_argument("--owner-uid", required=True, type=int)
     args = parser.parse_args()

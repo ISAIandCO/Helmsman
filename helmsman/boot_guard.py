@@ -24,7 +24,7 @@ def policy(directory):
 
 
 def main():
-    armed, lan = policy("/var/lib/helmsman")
-    runtime = Runtime("/var/lib/helmsman-app/current/engines", Path("/var/lib/helmsman/runtime"))
+    armed, lan = policy("/opt/helmsman/state")
+    runtime = Runtime("/opt/helmsman/current/engines", Path("/opt/helmsman/state/runtime"))
     if armed:
         runtime.install_guard(lan)

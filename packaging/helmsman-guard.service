@@ -4,16 +4,16 @@ DefaultDependencies=no
 After=local-fs.target
 Before=network-pre.target NetworkManager.service systemd-networkd.service helmsman.service
 Wants=network-pre.target
-RequiresMountsFor=/var/lib/helmsman /var/lib/helmsman-app
+RequiresMountsFor=/opt/helmsman
 
 [Service]
 Type=oneshot
-ExecStart=/var/lib/helmsman-app/current/Helmsman guard
+ExecStart=/opt/helmsman/current/Helmsman guard
 RemainAfterExit=yes
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/helmsman
+ReadWritePaths=/opt/helmsman/state
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_DAC_OVERRIDE
 
 [Install]
