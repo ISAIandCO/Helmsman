@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Pinned source builds; complete vendored sources accompany every release."""
 import json
+import hashlib
 import os
 import shutil
 import subprocess
@@ -32,8 +33,11 @@ def main():
             run(["git", "init"], source)
             run(["git", "remote", "add", "origin", spec["repository"]], source)
         run(["git", "fetch", "--depth=1", "origin", spec["commit"]], source)
-        run(["git", "checkout", "--detach", "FETCH_HEAD"], source)
+        run(["git", "checkout", "--force", "--detach", "FETCH_HEAD"], source)
         if name.startswith("sing-box"):
+            patch = ROOT / "patches/sing-box-doh-query.patch"
+            run(["git", "apply", str(patch)], source)
+            spec["patches"] = {str(patch.relative_to(ROOT)): hashlib.sha256(patch.read_bytes()).hexdigest()}
             run(["go", "mod", "vendor"], source, env)
             run(["go", "build", "-mod=vendor", "-buildvcs=false", "-trimpath", "-tags", spec["tags"], "-ldflags", "-s -w -checklinkname=0 -X github.com/sagernet/sing-box/constant.Version=" + spec["version"], "-o", str(OUT / name), "./cmd/sing-box"], source, env)
         else:

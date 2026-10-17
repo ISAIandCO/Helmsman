@@ -44,7 +44,7 @@ jobs:
           path: |
             build/engines
             build/sources
-          key: engines-ubuntu22-go1.26.8-${{ hashFiles('scripts/build-engines.py') }}
+          key: engines-ubuntu22-go1.26.8-${{ hashFiles('scripts/build-engines.py', 'patches/*.patch') }}
       - name: Build pinned network engines and vendor corresponding sources
         if: steps.engines.outputs.cache-hit != 'true'
         run: python scripts/build-engines.py

@@ -133,7 +133,10 @@ class Runtime:
             self.probe_port = reservation.getsockname()[1]
         self.probe_password = secrets.token_hex(24)
         config["inbounds"].append({"type": "socks", "tag": "health", "listen": "127.0.0.1", "listen_port": self.probe_port, "users": [{"username": "health", "password": self.probe_password}]})
-        config["route"]["rules"].insert(0, {"inbound": ["health"], "outbound": "proxy"})
+        config["route"]["rules"][0:0] = [
+            {"inbound": ["health"], "action": "resolve", "server": "dns-proxy"},
+            {"inbound": ["health"], "outbound": "proxy"},
+        ]
         self.check(config, p)  # Validate before disturbing the previous engine.
         if state["settings"]["kill_switch"]:
             self.install_guard(state["settings"]["lan"])

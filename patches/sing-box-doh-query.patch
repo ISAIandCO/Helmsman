@@ -1,0 +1,19 @@
+diff --git a/dns/transport/https.go b/dns/transport/https.go
+--- a/dns/transport/https.go
++++ b/dns/transport/https.go
+@@ -8,6 +8,7 @@ import (
+ 	"net/http"
+ 	"net/url"
+ 	"strconv"
++	"strings"
+ 	"sync"
+ 	"sync/atomic"
+ 	"time"
+@@ -94,5 +95,7 @@
+ 	}
+ 	path := options.Path
++	// Helmsman modification, 2026-10-17: preserve private DoH URL queries.
++	path, destinationURL.RawQuery, _ = strings.Cut(path, "?")
+ 	if path == "" {
+ 		path = "/dns-query"
+ 	}
