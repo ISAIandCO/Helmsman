@@ -8,6 +8,7 @@ import struct
 import subprocess
 import sys
 import threading
+import importlib.util
 import time
 from pathlib import Path
 
@@ -16,6 +17,8 @@ from helmsman.common import Store, defaults
 from helmsman.importers import parse
 from helmsman.routing import rule
 from helmsman.system import Runtime
+from helmsman.daemon import Controller, Server
+from helmsman.rpc import call
 
 ROOT = Path("/tmp/helmsman-netns-test")
 UUID = "00000000-0000-0000-0000-000000000001"
@@ -93,8 +96,17 @@ def client():
     state["settings"].update(lan=False, dns_direct="198.51.100.2")
     store.save()
     saved_hwid = state["hwid"]
+    controller = Controller(store, runtime)
+    control_path = str(store.directory / "control.sock")
+    rpc_server = Server(control_path, controller, os.getuid())
+    rpc_thread = threading.Thread(target=rpc_server.serve_forever, daemon=True)
+    rpc_thread.start()
+    spec = importlib.util.spec_from_file_location("decky_backend", Path(__file__).resolve().parents[1] / "decky/main.py")
+    decky = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(decky)
+    decky.SOCKET = control_path
     try:
-        runtime.start(state, p)
+        call("connect", path=control_path)
         for _ in range(100):
             if runtime.status()["state"] == "running":
                 break
@@ -102,6 +114,8 @@ def client():
         else:
             raise AssertionError(runtime.status())
         echo()
+        assert decky.request_service("status", {})["selected"] == p["id"]
+        print("PASS real engine controlled by common GUI/Decky Unix API", flush=True)
         print("PASS real TUN TCP", flush=True)
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
             s.settimeout(5)
@@ -138,8 +152,10 @@ def client():
         assert Store(store.directory).data["hwid"] == saved_hwid
         print("PASS recovery + saved configuration/HWID", flush=True)
     finally:
-        runtime.stop()
-        runtime.clear_guard()
+        decky.request_service("disconnect", {})
+        rpc_server.shutdown()
+        rpc_server.server_close()
+        rpc_thread.join()
     assert not Path("/sys/class/net/helmsman0").exists()
     assert subprocess.run(["nft", "list", "table", "inet", "helmsman_guard"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0
     assert "31800" not in subprocess.check_output(["ip", "rule", "show"], text=True)

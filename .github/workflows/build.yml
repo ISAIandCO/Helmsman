@@ -77,6 +77,7 @@ jobs:
           python scripts/package.py
           QT_QPA_PLATFORM=offscreen dist/Helmsman/Helmsman ctl --help
           python scripts/check-artifacts.py
+          python scripts/check-install.py
       - uses: actions/upload-artifact@v4
         with:
           name: helmsman-${{ github.sha }}

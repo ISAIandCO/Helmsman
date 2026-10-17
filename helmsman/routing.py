@@ -108,6 +108,8 @@ def compile_config(state, profile, runtime, engine_uid, tun=True):
         settings["dns"]["servers"][2] = {"type": "udp", "tag": "dns-proxy", "server": profile["dns"], "detour": "proxy"}
     if tun:
         settings["inbounds"] = [{"type": "tun", "tag": "tun", "interface_name": "helmsman0", "address": ["172.31.255.1/30", "fdfe:dcba:9876::1/126"], "mtu": s["mtu"], "auto_route": True, "auto_redirect": False, "strict_route": True, "stack": "mixed", "iproute2_table_index": 31800, "iproute2_rule_index": 31800, "exclude_uid": [engine_uid]}]
+        if outbound["type"] in {"wireguard", "openvpn-client"}:
+            settings["inbounds"][0]["mtu"] = min(s["mtu"], outbound.get("mtu", 1280 if outbound["type"] == "wireguard" else 1500))
     r = settings["route"]["rules"]
     r.extend([{"action": "sniff", "timeout": "200ms"}, {"protocol": "dns", "action": "hijack-dns"}, {"port": 53, "action": "hijack-dns"}])
     if not s["ipv6"]:

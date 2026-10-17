@@ -116,6 +116,10 @@ class TransportTests(unittest.TestCase):
         state["settings"]["lan"] = False
         client_config = compile_config(state, p, self.root, os.getuid(), tun=False)
         client_config["log"] = {"level": "debug"}
+        # This test has no TUN: binding UDP to the physical interface would
+        # intentionally make the loopback-only server unreachable. The separate
+        # namespace test exercises the application's real auto-detection/TUN.
+        client_config["route"]["auto_detect_interface"] = False
         client_config["inbounds"] = [{"type": "socks", "listen": "127.0.0.1", "listen_port": socks_port, "users": [{"username": "test", "password": "test"}]}]
         procs, logs = [], []
         try:
@@ -127,7 +131,7 @@ class TransportTests(unittest.TestCase):
                 procs.append(subprocess.Popen([str(binary), "run", "-c", str(file)], stdout=log, stderr=log))
             last = None
             deadline = time.monotonic() + 25
-            for _ in range(10):
+            for _ in range(250):
                 if time.monotonic() > deadline:
                     break
                 if any(p.poll() is not None for p in procs):
