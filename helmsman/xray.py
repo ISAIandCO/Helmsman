@@ -98,7 +98,7 @@ def compile_xray(profile, proxy=None, bootstrap="9.9.9.9", ipv6=True):
                 raise UserError("VMess XHTTP: global_padding/authenticated_length не переносятся в Xray.")
         settings = {"vnext": [{"address": o["server"], "port": o["server_port"], "users": [user]}]}
     stream = stream_settings(o)
-    stream["sockopt"] = {"domainStrategy": "UseIP" if ipv6 else "UseIPv4"}
+    stream["sockopt"] = {"domainStrategy": "UseIP" if ipv6 else "UseIPv4", "penetrate": True}
     return {"log": {"loglevel": "none", "access": "none", "error": "none"},
             "dns": {"servers": [bootstrap], "queryStrategy": "UseIP" if ipv6 else "UseIPv4"},
             "inbounds": [{"listen": "127.0.0.1", "port": port, "protocol": "socks", "settings": {"auth": "password", "accounts": [{"user": "helmsman", "pass": password}], "udp": True, "ip": "127.0.0.1"}}],

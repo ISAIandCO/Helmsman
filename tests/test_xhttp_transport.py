@@ -87,7 +87,7 @@ class XhttpTransportTests(unittest.TestCase):
             o.pop("uuid")
             o["password"] = "test-password"
         if download:
-            o["transport"]["extra"] = {"downloadSettings": {"address": "127.0.0.1", "port": server_port, "network": "xhttp", "security": "tls", "tlsSettings": {"serverName": "localhost", "alpn": ["h2"], "useSystemCA": True}, "xhttpSettings": {"path": "/helmsman", "mode": mode}}}
+            o["transport"]["extra"] = {"downloadSettings": {"address": "download.fixture", "port": server_port, "network": "xhttp", "security": "tls", "tlsSettings": {"serverName": "localhost", "alpn": ["h2"], "useSystemCA": True}, "xhttpSettings": {"path": "/helmsman", "mode": mode}}}
         server = {"log": {"loglevel": "debug"}, "inbounds": [{"listen": "127.0.0.1", "port": server_port, "protocol": kind, "settings": settings, "streamSettings": {"network": "xhttp", "xhttpSettings": {"path": "/helmsman", "mode": mode}, "security": "tls", "tlsSettings": {"alpn": ["h2", "http/1.1"], "certificates": [{"certificateFile": str(self.root / "cert"), "keyFile": str(self.root / "key")}]}}}], "outbounds": [{"protocol": "freedom", "settings": {"finalRules": [{"action": "allow", "ip": ["127.0.0.1/32"]}]}}]}
         if reality:
             keys = subprocess.check_output([binary, "x25519"], text=True)
@@ -107,6 +107,8 @@ class XhttpTransportTests(unittest.TestCase):
             o["tls"] = {"enabled": True, "server_name": "localhost", "utls": {"enabled": True, "fingerprint": "chrome"}, "reality": {"enabled": True, "public_key": public, "short_id": "1234"}}
         client = compile_xray(profile(o), (client_port, "test"))
         client["log"] = {"loglevel": "debug"}
+        if download:
+            client["dns"]["hosts"] = {"download.fixture": "127.0.0.1"}
         procs, logs = [], []
         try:
             for name, config in (("server", server), ("client", client)):

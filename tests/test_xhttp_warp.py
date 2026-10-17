@@ -37,6 +37,7 @@ class XhttpWarpTests(unittest.TestCase):
         proxy = next(o for o in c["outbounds"] if o["tag"] == "proxy")
         self.assertEqual(proxy["type"], "socks")
         self.assertEqual(proxy["password"], "secret")
+        self.assertTrue(compile_xray(p)["outbounds"][0]["streamSettings"]["sockopt"]["penetrate"])
         self.assertEqual(c["route"]["final"], "proxy")
         self.assertEqual(c["inbounds"][0]["type"], "tun")
         # Download transport cannot smuggle root files, interfaces or services.

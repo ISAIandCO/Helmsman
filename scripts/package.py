@@ -53,7 +53,7 @@ def main():
     licenses.mkdir()
     shutil.copytree(ROOT / "packaging/licenses", licenses / "runtime-notices")
     for path in (ROOT / "build" / "sources").rglob("*"):
-        if path.is_file() and path.name.lower().startswith(("license", "copying", "notice")) and ".git" not in path.parts and "nonfree" not in path.parts:
+        if path.is_file() and (path.name.lower().startswith(("license", "copying", "notice")) or path.name in {"GO-LICENSE", "GO-PATENTS"}) and ".git" not in path.parts and "nonfree" not in path.parts:
             target = licenses / path.relative_to(ROOT / "build" / "sources")
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)
