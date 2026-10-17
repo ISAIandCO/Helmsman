@@ -45,6 +45,7 @@ function Content() {
     finally { setBusy(false); }
   };
   const names: Record<string, string> = { disconnected: "Отключено", connecting: "Подключение…", running: "VPN включён", connected: "Подключено", authorizing: "Ожидание авторизации", error: "Ошибка" };
+  const overlay = status?.profiles.find(p => p.id === status.selected)?.protocol === "zerotier";
   return <>
     <PanelSection title={status ? names[status.state] ?? status.state : "Helmsman"}>
       <PanelSectionRow><div style={{ fontSize: 14, lineHeight: 1.45, overflowWrap: "anywhere" }}>
@@ -62,14 +63,14 @@ function Content() {
         <PanelSectionRow><DropdownItem label="Подключение" disabled={busy} selectedOption={status.selected}
           rgOptions={status.profiles.map(p => ({ data: p.id, label: `${p.name} · ${p.protocol}` }))}
           onChange={o => action("select", { profile_id: o.data })} /></PanelSectionRow>
-        <PanelSectionRow><DropdownItem label="Сценарий" disabled={busy} selectedOption={status.preset}
+        <PanelSectionRow><DropdownItem label="Сценарий VPN" disabled={busy || overlay} selectedOption={status.preset}
           rgOptions={Object.entries(status.presets).map(([data, label]) => ({ data, label }))}
           onChange={o => action("preset", { preset: o.data })} /></PanelSectionRow>
       </>}
     </PanelSection>
     <PanelSection title="Обслуживание">
       <PanelSectionRow><ButtonItem layout="below" disabled={busy} onClick={() => action("subscriptions_update")}>Обновить подписки</ButtonItem></PanelSectionRow>
-      <PanelSectionRow><ButtonItem layout="below" disabled={busy || !status?.desired} onClick={() => action("probe")}>Проверить VPN</ButtonItem></PanelSectionRow>
+      <PanelSectionRow><ButtonItem layout="below" disabled={busy || !status?.desired || overlay} onClick={() => action("probe")}>Проверить VPN</ButtonItem></PanelSectionRow>
       <PanelSectionRow><div style={{ fontSize: 12 }}>Полная настройка — в Helmsman в Desktop Mode. Закрытие меню сохраняет соединение.</div></PanelSectionRow>
     </PanelSection>
   </>;

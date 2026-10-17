@@ -191,6 +191,8 @@ class Window(QMainWindow):
         if s.get("last_probe"):
             text += "\nПоследняя проверка: " + s["last_probe"]["message"]
         self.state_label.setText(text)
+        chosen = next((p for p in s["profiles"] if p["id"] == s["selected"]), {})
+        self.preset_picker.setEnabled(chosen.get("protocol") != "zerotier")
         if self.profile_picker.currentData() != s["selected"]:
             self.profile_picker.setCurrentIndex(self.profile_picker.findData(s["selected"]))
         self.preset_picker.setCurrentIndex(self.preset_picker.findData(s["preset"]))
@@ -494,6 +496,8 @@ def main():
     theme(app)
     window = Window()
     window.show()
+    if "--smoke-test" in sys.argv:
+        QTimer.singleShot(700, app.quit)
     app.exec()
 
 

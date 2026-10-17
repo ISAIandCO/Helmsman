@@ -39,6 +39,7 @@ cd ..
 HELMSMAN_ENGINES="$PWD/build/engines" python -m unittest discover -s tests -v
 QT_QPA_PLATFORM=offscreen python scripts/check-gui.py
 sudo env HELMSMAN_ENGINES="$PWD/build/engines" bash scripts/test-netns.sh "$(command -v python)"
+python scripts/runtime-sources.py
 python scripts/package.py
 python scripts/check-artifacts.py
 ```

@@ -73,6 +73,7 @@ jobs:
         run: sudo env HELMSMAN_ENGINES="$PWD/build/engines" bash scripts/test-netns.sh "$(command -v python)"
       - name: Build installable application and archives
         run: |
+          python scripts/runtime-sources.py
           python scripts/package.py
           QT_QPA_PLATFORM=offscreen dist/Helmsman/Helmsman ctl --help
           python scripts/check-artifacts.py

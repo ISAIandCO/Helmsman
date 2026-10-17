@@ -110,11 +110,12 @@ class TransportTests(unittest.TestCase):
                 obfs = {"jc": 2, "jmin": 40, "jmax": 80, "s1": 16, "s2": 16, "s3": 8, "s4": 4, "h1": "123", "h2": "456", "h3": "789", "h4": "987"}
                 server["amnezia_wg"] = out["amnezia_wg"] = obfs
             endpoints = [server]
-        server_config = {"log": {"level": "error"}, "inbounds": [] if endpoints else [server], "endpoints": endpoints, "outbounds": [{"type": "direct", "tag": "direct"}], "route": {"final": "direct"}}
+        server_config = {"log": {"level": "debug"}, "inbounds": [] if endpoints else [server], "endpoints": endpoints, "outbounds": [{"type": "direct", "tag": "direct"}], "route": {"final": "direct"}}
         p = profile(out, "test")
         state = defaults()
         state["settings"]["lan"] = False
         client_config = compile_config(state, p, self.root, os.getuid(), tun=False)
+        client_config["log"] = {"level": "debug"}
         client_config["inbounds"] = [{"type": "socks", "listen": "127.0.0.1", "listen_port": socks_port, "users": [{"username": "test", "password": "test"}]}]
         procs, logs = [], []
         try:
@@ -132,7 +133,8 @@ class TransportTests(unittest.TestCase):
                 if any(p.poll() is not None for p in procs):
                     break
                 try:
-                    with socks_connect(socks_port, "test", "test", "127.0.0.1", self.echo.server_address[1]) as sock:
+                    target = "10.211.0.1" if endpoints else "127.0.0.1"
+                    with socks_connect(socks_port, "test", "test", target, self.echo.server_address[1]) as sock:
                         sock.sendall(b"helmsman-real-transport")
                         self.assertEqual(receive(sock, 23), b"helmsman-real-transport")
                     return

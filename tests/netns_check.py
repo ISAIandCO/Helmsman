@@ -145,6 +145,30 @@ def client():
     assert "31800" not in subprocess.check_output(["ip", "rule", "show"], text=True)
     echo()
     print("PASS disconnect cleanup and normal direct access", flush=True)
+    before_routes = subprocess.check_output(["ip", "route", "show", "default"], text=True)
+    zt = parse("zerotier://0123456789abcdef")[0]
+    try:
+        runtime.start(state, zt)
+        status = None
+        for _ in range(30):
+            status = runtime.status()
+            if status.get("node_id") and status["state"] == "authorizing":
+                break
+            if status["state"] == "error":
+                raise AssertionError(status)
+            time.sleep(0.2)
+        else:
+            raise AssertionError("ZeroTier did not expose pending join and Node ID: " + str(status))
+        policy = (runtime.zt_home / "networks.d/0123456789abcdef.local.conf").read_text()
+        for entry in ("allowDefault=0", "allowGlobal=0", "allowDNS=0"):
+            assert entry in policy, policy
+        assert subprocess.check_output(["ip", "route", "show", "default"], text=True) == before_routes
+        print("PASS real ZeroTier Agent start, join pending, Node ID and route/DNS policy", flush=True)
+    finally:
+        runtime.stop()
+        runtime.clear_guard()
+    assert not list((runtime.zt_home / "networks.d").glob("*"))
+    print("PASS ZeroTier disconnect and membership cleanup", flush=True)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 """Only this module touches host networking. No shell and no imported scripts."""
 import json
+import ipaddress
 import os
 import pwd
 import secrets
@@ -241,8 +242,13 @@ def socks_connect(port, username, password, target, target_port):
         sock.sendall(b"\x01" + bytes([len(u)]) + u + bytes([len(p)]) + p)
         if receive(sock, 2) != b"\x01\x00":
             raise UserError("Ошибка авторизации локальной проверки.")
-        t = target.encode("idna")
-        sock.sendall(b"\x05\x01\x00\x03" + bytes([len(t)]) + t + int(target_port).to_bytes(2, "big"))
+        try:
+            address = ipaddress.ip_address(target)
+            encoded = bytes([1 if address.version == 4 else 4]) + address.packed
+        except ValueError:
+            t = target.encode("idna")
+            encoded = b"\x03" + bytes([len(t)]) + t
+        sock.sendall(b"\x05\x01\x00" + encoded + int(target_port).to_bytes(2, "big"))
         header = receive(sock, 4)
         if header[1] != 0:
             raise UserError("Не удалось подключиться к проверочному адресу.")

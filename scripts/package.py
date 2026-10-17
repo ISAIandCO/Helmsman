@@ -22,6 +22,12 @@ def main():
     stage.mkdir(parents=True)
     subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--name", "Helmsman", "--paths", str(ROOT), "packaging/entry.py"], cwd=ROOT, check=True)
     shutil.copytree(ROOT / "dist" / "Helmsman", stage / "app")
+    # QtGui's generic hook also collects PDF and virtual-keyboard plugins.
+    # Steam supplies its own keyboard; neither plugin belongs in this app.
+    internal = stage / "app/_internal"
+    for path in internal.rglob("*"):
+        if path.is_file() and (path.name in {"libqpdf.so", "libqtvirtualkeyboardplugin.so"} or any(path.name.startswith("libQt6" + n) for n in ("Pdf", "Qml", "Quick", "VirtualKeyboard"))):
+            path.unlink()
     shutil.copytree(ROOT / "build" / "engines", stage / "app" / "engines", symlinks=True)
     shutil.copytree(ROOT / "packaging", stage / "packaging")
     for name in ("install.sh", "uninstall.sh"):
@@ -35,10 +41,6 @@ def main():
         shutil.copy2(ROOT / "decky" / name, plugin / name)
     shutil.copytree(ROOT / "decky" / "dist", plugin / "dist")
     shutil.copy2(ROOT / "LICENSE", plugin / "LICENSE")
-    with zipfile.ZipFile(out / f"helmsman-decky-{version}.zip", "w", zipfile.ZIP_DEFLATED) as z:
-        for path in plugin.rglob("*"):
-            if path.is_file():
-                z.write(path, "helmsman/" + str(path.relative_to(plugin)))
     # PyInstaller Qt remains dynamically linked and replaceable. Include the
     # original licensing notices from every bundled source/dependency.
     licenses = stage / "app" / "licenses"
@@ -48,6 +50,29 @@ def main():
             target = licenses / path.relative_to(ROOT / "build" / "sources")
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, target)
+    runtime_sources = ROOT / "build/runtime-sources"
+    if not (runtime_sources / "SOURCES.json").exists():
+        raise RuntimeError("Run python scripts/runtime-sources.py before packaging")
+    for archive in runtime_sources.glob("*.tar.*"):
+        with tarfile.open(archive) as t:
+            for member in t:
+                path = Path(member.name)
+                licensed = path.name.lower().startswith(("license", "copying", "notice")) or any(p.lower().startswith("license") for p in path.parts)
+                if member.isfile() and member.size < 5 * 1024 * 1024 and licensed and ".." not in path.parts:
+                    target = licenses / "runtime" / archive.name / path
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    target.write_bytes(t.extractfile(member).read())
+    for module in ("@decky/api", "@decky/ui", "tslib"):
+        for path in (ROOT / "decky/node_modules" / module).glob("*LICENSE*"):
+            target = licenses / "decky" / module / path.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+    if (licenses / "decky").exists():
+        shutil.copytree(licenses / "decky", plugin / "licenses", dirs_exist_ok=True)
+    with zipfile.ZipFile(out / f"helmsman-decky-{version}.zip", "w", zipfile.ZIP_DEFLATED) as z:
+        for path in plugin.rglob("*"):
+            if path.is_file():
+                z.write(path, "helmsman/" + str(path.relative_to(plugin)))
     with tarfile.open(out / f"helmsman-{version}-linux-x86_64.tar.gz", "w:gz") as t:
         t.add(stage, arcname=stage.name)
     sources = ROOT / "build" / "sources"
@@ -58,6 +83,10 @@ def main():
             return info
         with tarfile.open(out / f"helmsman-{version}-engine-sources.tar.gz", "w:gz") as t:
             t.add(sources, arcname="engine-sources", filter=source_filter)
+    with tarfile.open(out / f"helmsman-{version}-runtime-sources.tar.gz", "w:gz") as t:
+        for p in runtime_sources.iterdir():
+            if not p.name.endswith(".part"):
+                t.add(p, arcname="runtime-sources/" + p.name)
     # Include the exact own source tree rather than a moving GitHub branch URL.
     with tarfile.open(out / f"helmsman-{version}-source.tar.gz", "w:gz") as t:
         paths = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0")
