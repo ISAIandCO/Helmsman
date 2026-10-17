@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 from .system import Runtime
+from .common import boot_id, boot_intent
 
 
 def policy(directory):
@@ -9,7 +10,10 @@ def policy(directory):
     try:
         state = json.loads((directory / "state.json").read_text())
         selected = next((p for p in state["profiles"] if p["id"] == state["selected"]), None)
-        return bool(state["desired"] and state["settings"]["kill_switch"] and selected and selected["kind"] == "sing-box"), bool(state["settings"]["lan"])
+        desired = boot_intent(state, boot_id())
+        if desired and selected is None:
+            raise ValueError('missing selected profile')
+        return bool(desired and state["settings"]["kill_switch"] and selected and selected["kind"] == "sing-box"), bool(state["settings"]["lan"])
     except (OSError, ValueError, KeyError, TypeError):
         # An independent last-known guard marker protects a damaged/missing
         # state file. With neither file this is a new, disconnected install.
@@ -28,3 +32,5 @@ def main():
     runtime = Runtime("/opt/helmsman/current/engines", Path("/opt/helmsman/state/runtime"))
     if armed:
         runtime.install_guard(lan)
+    else:
+        runtime.clear_guard()

@@ -20,6 +20,8 @@ w.timer.stop()
 saved_requests = []
 w.request = lambda method, params=None, callback=None, quiet=False: saved_requests.append((method, params))
 w.loaded(defaults())
+assert not w.setting_widgets['auto_connect'].isChecked()
+w.setting_widgets['auto_connect'].setChecked(True)
 for key in ('dns_proxy', 'dns_direct'):
     selector = w.setting_widgets[key]
     for index in range(selector.picker.count() - 1):
@@ -31,6 +33,7 @@ for key in ('dns_proxy', 'dns_direct'):
 w.save_settings()
 assert saved_requests[-1][0] == 'settings_save'
 assert saved_requests[-1][1]['settings']['dns_direct'] == 'tls://my-resolver.example:8853'
+assert saved_requests[-1][1]['settings']['auto_connect'] is True
 w.loaded(defaults())
 w.resize(1280, 800)
 w.show()

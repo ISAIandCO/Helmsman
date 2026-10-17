@@ -5,7 +5,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-VERSION = "0.1.0-alpha.6"
+VERSION = "0.1.0-alpha.7"
 MAX_BYTES = 8 * 1024 * 1024
 SOCKET = "/run/helmsman/control.sock"
 PRESETS = {"full": "Весь интернет через VPN", "ru-selective": "Россия: выборочно", "ru-except": "Россия напрямую", "manual": "Мои правила"}
@@ -41,10 +41,25 @@ def identifier():
     return uuid.uuid4().hex
 
 
+def boot_id():
+    """Linux's random per-boot token; contains no hardware identifier."""
+    return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+
+
+def boot_intent(state, current_boot):
+    # Legacy state has no boot token: an in-place update preserves its session.
+    saved_boot = state.get('boot_id', current_boot)
+    if not isinstance(saved_boot, str) or not saved_boot or type(state['settings'].get('auto_connect', False)) is not bool:
+        raise ValueError('invalid boot preference')
+    if saved_boot == current_boot:
+        return bool(state['desired'])
+    return bool(state['settings'].get('auto_connect', False) and any(p['id'] == state['selected'] for p in state['profiles']))
+
+
 def defaults():
     return {"schema": 1, "hwid": identifier(), "profiles": [], "subscriptions": [],
             "selected": "", "desired": False, "preset": "full", "rules": [], "lists": [],
-            "settings": {"kill_switch": True, "lan": True, "ipv6": True, "mtu": 1400,
+            "settings": {"auto_connect": False, "kill_switch": True, "lan": True, "ipv6": True, "mtu": 1400,
                          "default_action": "proxy", "dns_proxy": "https://cloudflare-dns.com/dns-query", "dns_direct": "https://dns.quad9.net/dns-query",
                          "dns_bootstrap": "9.9.9.9",
                          "reconnect_seconds": 15, "list_update_hours": 24}}
@@ -74,6 +89,16 @@ class Store:
 
     def save(self):
         atomic_json(self.path, self.data)
+
+    def prepare_boot(self, current_boot=None):
+        try:
+            current_boot = boot_id() if current_boot is None else current_boot
+            desired = boot_intent(self.data, current_boot)
+        except (OSError, ValueError, TypeError, KeyError):
+            raise UserError('Не удалось восстановить настройки автоподключения; состояние не изменено. Проверьте резервную копию настроек.') from None
+        if self.data.get('boot_id') != current_boot or self.data['desired'] != desired:
+            self.data.update(boot_id=current_boot, desired=desired)
+            self.save()
 
 
 def label(value):

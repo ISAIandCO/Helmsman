@@ -213,6 +213,80 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(policy(d), (True, True))
             (Path(d) / "guard.json").write_text("damaged")
             self.assertEqual(policy(d), (True, False))
+            damaged = defaults()
+            damaged['boot_id'] = None
+            (Path(d) / 'state.json').write_text(json.dumps(damaged))
+            self.assertEqual(policy(d), (True, False))
+
+    def test_autoconnect_new_boot_and_early_guard_share_the_same_policy(self):
+        from helmsman.boot_guard import policy
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(d); store.prepare_boot('boot-a')
+            c = Controller(store, MemoryRuntime(d))
+            c.call('import', {'text': LINK})
+            c.call('connect', {})
+            saved_hwid = c.data['hwid']
+            with patch('helmsman.boot_guard.boot_id', return_value='boot-b'):
+                self.assertEqual(policy(d), (False, True))
+            # A service restart within this boot keeps an explicitly enabled VPN.
+            store.prepare_boot('boot-a')
+            self.assertTrue(store.data['desired'])
+            # A different OS boot leaves VPN off when the option is off.
+            store.prepare_boot('boot-b')
+            self.assertFalse(store.data['desired'])
+            c.call('auto_connect', {'enabled': True})
+            with patch('helmsman.boot_guard.boot_id', return_value='boot-c'):
+                self.assertEqual(policy(d), (True, True))
+            store.prepare_boot('boot-c')
+            self.assertTrue(store.data['desired'])
+            self.assertEqual(store.data['hwid'], saved_hwid)
+            self.assertEqual(Store(d).data, store.data)
+            store.data['profiles'] = []
+            store.prepare_boot('boot-d')
+            self.assertFalse(store.data['desired'])
+
+    def test_autoconnect_toggle_does_not_connect_disconnect_or_restart_tunnel(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(d); store.prepare_boot('boot-a')
+            c = Controller(store, MemoryRuntime(d))
+            self.assertFalse(c.status()['auto_connect'])
+            c.call('auto_connect', {'enabled': True})
+            self.assertFalse(c.status()['desired'])
+            self.assertIsNone(c.runtime.active)
+            c.call('import', {'text': LINK})
+            c.call('connect', {})
+            with patch.object(c.runtime, 'start', wraps=c.runtime.start) as start:
+                c.call('auto_connect', {'enabled': False})
+                c.call('settings_save', {'settings': {'auto_connect': True}})
+                c.call('settings_save', {'settings': {'auto_connect': False}})
+                start.assert_not_called()
+            self.assertTrue(c.status()['desired'])
+            self.assertTrue(c.runtime.guard)
+            # Crash recovery is independent of boot-time autoconnect.
+            c.runtime.active = None
+            c.tick()
+            self.assertIsNotNone(c.runtime.active)
+            before = copy.deepcopy(c.data)
+            for params in ({}, {'enabled': 1}, {'enabled': 'true'}, {'enabled': None}, {'enabled': True, 'kill_switch': False}):
+                with self.subTest(params=params), self.assertRaises(UserError):
+                    c.call('auto_connect', params)
+                self.assertEqual(c.data, before)
+
+    def test_legacy_active_session_migrates_without_enabling_boot_autoconnect(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(d)
+            c = Controller(store, MemoryRuntime(d))
+            c.call('import', {'text': LINK}); c.call('connect', {})
+            del store.data['settings']['auto_connect']
+            store.save()
+            restored = Store(d)
+            restored.prepare_boot('boot-a')
+            self.assertFalse(restored.data['settings']['auto_connect'])
+            self.assertTrue(restored.data['desired'])
+            restored.prepare_boot('boot-b')
+            self.assertFalse(restored.data['desired'])
+            self.assertEqual(restored.data['hwid'], store.data['hwid'])
+            self.assertEqual(restored.data['profiles'], store.data['profiles'])
 
     def test_gui_rpc_and_decky_use_same_controller(self):
         with tempfile.TemporaryDirectory() as d:
@@ -234,6 +308,13 @@ class CoreTests(unittest.TestCase):
                 imported = call("import", {"text": LINK}, path)
                 status = decky.request_service("status", {})
                 self.assertEqual(status["profiles"][0]["id"], imported["profiles"][0])
+                decky.request_service('auto_connect', {'enabled': True})
+                self.assertTrue(call('status', path=path)['auto_connect'])
+                self.assertFalse(call('status', path=path)['desired'])
+                self.assertTrue(call('configuration', path=path)['settings']['auto_connect'])
+                decky.request_service('auto_connect', {'enabled': False})
+                with self.assertRaises(RuntimeError):
+                    decky.request_service('settings_save', {'settings': {'kill_switch': False}})
                 decky.request_service("connect", {})
                 self.assertTrue(call("status", path=path)["desired"])
                 self.assertTrue(controller.runtime.guard)

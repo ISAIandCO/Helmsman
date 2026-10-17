@@ -253,7 +253,7 @@ class Runtime:
             # A live TUN client could otherwise continue serving direct rules
             # after loss of its transport. Stop it while retaining the guard.
             self.stop()
-            return {"state": "error", "message": "Xray XHTTP завершился. Сервис повторит подключение.", "guard": self.guard}
+            return {"state": "error", "message": "Сетевой транспорт Xray завершился. Сервис повторит подключение.", "guard": self.guard}
         if self.profile["kind"] == "zerotier":
             info = self.zt("info") or {}
             nets = self.zt("listnetworks") or []

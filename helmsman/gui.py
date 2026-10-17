@@ -649,10 +649,11 @@ class Window(QMainWindow):
         self.setting_widgets = {}
         _, protection = card(l)
         protection.addWidget(label('Защита и локальная сеть', 'cardTitle'))
-        for key, name in {"kill_switch": "Блокировать прямой выход при сбое VPN", "lan": "Доступ к локальной сети и Remote Play", "ipv6": "Разрешить IPv6 через правила"}.items():
+        for key, name in {"auto_connect": "Подключать при загрузке Steam Deck", "kill_switch": "Блокировать прямой выход при сбое VPN", "lan": "Доступ к локальной сети и Remote Play", "ipv6": "Разрешить IPv6 через правила"}.items():
             w = Switch(name)
             protection.addWidget(w)
             self.setting_widgets[key] = w
+        protection.addWidget(label('Автоподключение выключено по умолчанию. Восстановление уже включённого VPN после сбоя и сна работает независимо.', 'caption'))
         dns_row = QHBoxLayout(); dns_row.setSpacing(16)
         for key, name in [("dns_proxy", "DNS через VPN"), ("dns_direct", "DNS прямых запросов")]:
             frame, body = card()

@@ -20,6 +20,29 @@ def rpc(method, params=None):
     return json.loads(subprocess.check_output([binary, "ctl", method, json.dumps(params or {})], text=True))
 
 
+def wait_state(expected):
+    for _ in range(50):
+        result = subprocess.run([binary, 'ctl', 'status'], capture_output=True, text=True)
+        if result.returncode == 0:
+            status = json.loads(result.stdout)
+            if status['state'] == expected:
+                return status
+        time.sleep(0.1)
+    raise AssertionError(result.stdout + result.stderr)
+
+
+def previous_boot():
+    # Simulates a new OS boot token; does not reboot the shared CI runner.
+    subprocess.run(['sudo', 'python3', '-c', """
+import json
+from pathlib import Path
+p=Path('/opt/helmsman/state/state.json')
+state=json.loads(p.read_text())
+state['boot_id']='previous-test-boot'
+p.write_text(json.dumps(state))
+"""], check=True)
+
+
 # GitHub runners make /opt writable for tool installation. Match the secure
 # system directory on the target before testing a root service installation.
 subprocess.run(["stat", "-c", "%U:%G %a %n", "/opt"], check=True)
@@ -103,6 +126,31 @@ for name in ('/opt/helmsman','/opt/helmsman/state'):
         assert Path("/sys/class/net/helmsman0").exists()
         assert subprocess.run(["sudo", "nft", "list", "table", "inet", "helmsman_guard"], stdout=subprocess.DEVNULL).returncode == 0
         print("PASS installed frozen daemon starts native Xray mux sidecar, TUN and crash guard under systemd restrictions")
+        children = subprocess.check_output(['pgrep', '-u', 'helmsman-engine'], text=True)
+        backend = runpy.run_path(str(plugin / 'main.py'))
+        backend['request_service']('auto_connect', {'enabled': True})
+        assert rpc('status')['auto_connect']
+        backend['request_service']('auto_connect', {'enabled': False})
+        assert subprocess.check_output(['pgrep', '-u', 'helmsman-engine'], text=True) == children
+        subprocess.run(['sudo', 'systemctl', 'restart', 'helmsman.service'], check=True)
+        assert wait_state('running')['guard']  # Same boot: recover active VPN even with option off.
+        subprocess.run(['sudo', 'systemctl', 'stop', 'helmsman.service'], check=True)
+        previous_boot()
+        subprocess.run(['sudo', 'systemctl', 'restart', 'helmsman-guard.service', 'helmsman.service'], check=True)
+        off = wait_state('disconnected')
+        assert not off['desired'] and not off['guard'] and not off['auto_connect']
+        assert not Path('/sys/class/net/helmsman0').exists()
+        backend['request_service']('auto_connect', {'enabled': True})
+        assert not rpc('status')['desired']  # Setting the option alone must never connect.
+        subprocess.run(['sudo', 'systemctl', 'stop', 'helmsman.service'], check=True)
+        previous_boot()
+        subprocess.run(['sudo', 'systemctl', 'restart', 'helmsman-guard.service', 'helmsman.service'], check=True)
+        on = wait_state('running')
+        assert on['desired'] and on['guard'] and on['auto_connect']
+        assert config()['hwid'] == before['hwid']
+        assert config()['profiles'] == before['profiles']
+        backend['request_service']('auto_connect', {'enabled': False})
+        print('PASS Decky/Desktop optional boot autoconnect, same-boot recovery, simulated new boot on/off and early guard')
     finally:
         rpc("disconnect")
     assert not Path("/sys/class/net/helmsman0").exists()

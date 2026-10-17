@@ -61,7 +61,7 @@ class Controller:
         s = self.runtime.status()
         if self.last_error:
             s["error"] = self.last_error
-        return {**s, "version": VERSION, "selected": self.data["selected"], "desired": self.data["desired"], "preset": self.data["preset"], "presets": PRESETS,
+        return {**s, "version": VERSION, "selected": self.data["selected"], "desired": self.data["desired"], "auto_connect": self.data['settings']['auto_connect'], "preset": self.data["preset"], "presets": PRESETS,
                 "profiles": [{"id": p["id"], "name": p["name"], "protocol": "zerotier" if p["kind"] == "zerotier" else "amneziawg" if p["outbound"].get("amnezia_wg") else p["outbound"]["type"] + ("/xhttp" if is_xhttp(p) else "") + ("/mux" if 'xray_mux' in p['outbound'] else '')} for p in self.data["profiles"]],
                 "subscriptions": [{k: s[k] for k in ("id", "name", "last_update", "error") if k in s} for s in self.data["subscriptions"]]}
 
@@ -168,6 +168,12 @@ class Controller:
                 self.runtime.clear_guard()
                 self.last_error = ""
                 self.event("Отключено пользователем; обычный доступ в интернет восстановлен.")
+            elif method == 'auto_connect':
+                if set(params) != {'enabled'} or type(params['enabled']) is not bool:
+                    raise UserError('Автоподключение: требуется логическое enabled.')
+                candidate = copy.deepcopy(self.data)
+                candidate['settings']['auto_connect'] = params['enabled']
+                self.commit(candidate)
             elif method == "select":
                 candidate = copy.deepcopy(self.data)
                 candidate["selected"] = params["profile_id"]
@@ -264,7 +270,7 @@ class Controller:
                     raise UserError("Неизвестный параметр сервиса.")
                 candidate["settings"].update(s)
                 c = candidate["settings"]
-                if any(type(c[k]) is not bool for k in ("kill_switch", "lan", "ipv6")):
+                if any(type(c[k]) is not bool for k in ("auto_connect", "kill_switch", "lan", "ipv6")):
                     raise UserError("Параметр должен быть логическим.")
                 if not 1280 <= int(c["mtu"]) <= 9000 or not 5 <= int(c["reconnect_seconds"]) <= 300 or not 1 <= int(c["list_update_hours"]) <= 720:
                     raise UserError("MTU: 1280–9000; повтор: 5–300 с; списки: 1–720 ч.")
@@ -273,7 +279,7 @@ class Controller:
                 for key in ("dns_proxy", "dns_direct"):
                     c[key] = resolver_url(c[key])
                 c["dns_bootstrap"] = bootstrap_address(c["dns_bootstrap"])
-                self.commit(candidate, restart=True)
+                self.commit(candidate, restart=any(k != 'auto_connect' and c[k] != self.data['settings'][k] for k in s))
             elif method == "list_save":
                 candidate = copy.deepcopy(self.data)
                 existing = next((x for x in candidate["lists"] if x["id"] == params.get("id")), None)
@@ -423,6 +429,7 @@ def main():
     args = parser.parse_args()
     os.umask(0o077)
     store = Store(args.data)
+    store.prepare_boot()
     runtime = Runtime(args.binaries, Path(args.data) / "runtime")
     controller = Controller(store, runtime)
     path = Path(args.socket)
