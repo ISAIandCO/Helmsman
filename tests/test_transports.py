@@ -50,7 +50,7 @@ class TransportTests(unittest.TestCase):
         cls.thread.start()
         cls.tmp = tempfile.TemporaryDirectory()
         cls.root = Path(cls.tmp.name)
-        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(cls.root / "key"), "-out", str(cls.root / "cert"), "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost", "-addext", "extendedKeyUsage=serverAuth"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(cls.root / "key"), "-out", str(cls.root / "cert"), "-days", "1", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost", "-addext", "extendedKeyUsage=serverAuth", "-addext", "keyUsage=digitalSignature,keyEncipherment"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         cls.cert = (cls.root / "cert").read_text()
         cls.key = (cls.root / "key").read_text()
 
@@ -111,6 +111,12 @@ class TransportTests(unittest.TestCase):
                 server["amnezia_wg"] = out["amnezia_wg"] = obfs
             endpoints = [server]
         server_config = {"log": {"level": "debug"}, "inbounds": [] if endpoints else [server], "endpoints": endpoints, "outbounds": [{"type": "direct", "tag": "direct"}], "route": {"final": "direct"}}
+        wake_port = port() if kind == "amneziawg" else None
+        if wake_port:
+            # Throne intentionally initializes a WG client on first outbound
+            # use. Wake the server fixture too; otherwise it never binds UDP.
+            server_config["inbounds"] = [{"type": "direct", "tag": "wake", "listen": "127.0.0.1", "listen_port": wake_port, "override_address": "10.211.0.2", "override_port": self.echo.server_address[1]}]
+            server_config["route"]["rules"] = [{"inbound": ["wake"], "outbound": "server"}]
         p = profile(out, "test")
         state = defaults()
         state["settings"]["lan"] = False
@@ -137,6 +143,11 @@ class TransportTests(unittest.TestCase):
                 if any(p.poll() is not None for p in procs):
                     break
                 try:
+                    if wake_port:
+                        with socket.create_connection(("127.0.0.1", wake_port), timeout=1) as wake:
+                            wake.sendall(b"wake")
+                        wake_port = None
+                        time.sleep(0.1)
                     target = "10.211.0.1" if endpoints else "127.0.0.1"
                     with socks_connect(socks_port, "test", "test", target, self.echo.server_address[1]) as sock:
                         sock.sendall(b"helmsman-real-transport")
@@ -148,7 +159,12 @@ class TransportTests(unittest.TestCase):
             for log in logs:
                 log.flush()
                 log.seek(0)
-            self.fail(kind + " failed: " + str(last) + " " + " ".join(log.read()[-2000:] for log in logs))
+            contents = [log.read() for log in logs]
+            qa = Path("test-results")
+            qa.mkdir(exist_ok=True)
+            for i, content in enumerate(contents):
+                (qa / (kind + f"-{i}.log")).write_text(content)
+            self.fail(kind + " failed: " + str(last) + " " + " ".join(content[:5000] + "\n...\n" + content[-3000:] for content in contents))
         finally:
             for p in procs:
                 if p.poll() is None:

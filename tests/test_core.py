@@ -35,6 +35,7 @@ class MemoryRuntime:
     def __init__(self, root):
         self.binaries = self.directory = Path(root)
         self.uid = os.getuid()
+        self.gid = os.getgid()
         self.active = None
         self.guard = False
     def status(self):
@@ -165,7 +166,9 @@ class CoreTests(unittest.TestCase):
             with self.assertRaises(UserError):
                 c.call("list_save", {"id": item["id"], "name": "test", "content": "not a domain!", "format": "text"})
             self.assertEqual(next(x for x in c.data["lists"] if x["id"] == new["id"])["path"], old_path)
-            self.assertEqual((Path(d) / "lists").stat().st_mode & 0o777, 0o755)
+            self.assertEqual((Path(d) / "lists").stat().st_mode & 0o777, 0o750)
+            self.assertEqual(Path(old_path).stat().st_mode & 0o777, 0o640)
+            self.assertIn("example.com", c.call("list_content", {"id": item["id"]})["content"])
 
     def test_guard_no_physical_established_bypass(self):
         script = firewall_script(999, True)

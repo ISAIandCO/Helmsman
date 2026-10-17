@@ -88,8 +88,9 @@ class Controller:
     def load_list(self, item, content=None):
         data = download(item["url"]) if content is None else content.encode()
         directory = self.store.directory / "lists"
-        directory.mkdir(mode=0o755, exist_ok=True)
-        os.chmod(directory, 0o755)  # daemon umask is 077; engine must traverse
+        directory.mkdir(mode=0o750, exist_ok=True)
+        os.chmod(directory, 0o750)
+        os.chown(directory, -1, self.runtime.gid)
         tmp = directory / (identifier() + ".json")
         try:
             if item.get("format") == "srs":
@@ -100,7 +101,8 @@ class Controller:
             else:
                 obj = source_list(json.loads(data))
             # Versioned files keep the previous running config usable on failure.
-            atomic_json(tmp, obj, mode=0o644)
+            atomic_json(tmp, obj, mode=0o640)
+            os.chown(tmp, -1, self.runtime.gid)
             return {**item, "path": str(tmp), "last_update": time.time(), "last_attempt": time.time(), "error": ""}
         except (ValueError, UnicodeError):
             raise UserError("Некорректный список. Прежняя версия сохранена.") from None
@@ -295,6 +297,11 @@ class Controller:
                 candidate = copy.deepcopy(self.data)
                 candidate["lists"] = [x for x in candidate["lists"] if x["id"] != params["id"]]
                 self.commit(candidate, restart=True)
+            elif method == "list_content":
+                item = next((x for x in self.data["lists"] if x["id"] == params["id"]), None)
+                if not item or not item.get("path"):
+                    raise UserError("Список не загружен.")
+                return {"content": Path(item["path"]).read_text()}
             elif method == "probe":
                 return self.runtime.probe()
             else:

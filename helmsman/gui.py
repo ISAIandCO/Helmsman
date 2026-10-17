@@ -379,17 +379,17 @@ class Window(QMainWindow):
         hint.setWordWrap(True)
         l.addWidget(hint)
 
-    def add_list(self, item=None):
+    def add_list(self, item=None, contents=None):
         item = item or {}
         if item.get("id", "").startswith("ru-"):
             QMessageBox.information(self, "Списки", "Для изменения встроенного списка создайте пользовательскую копию.")
             return
         existing = ""
         if item.get("path") and not item.get("url"):
-            try:
-                existing = Path(item["path"]).read_text()
-            except OSError:
-                pass
+            if contents is None:
+                self.request("list_content", {"id": item["id"]}, callback=lambda data: self.add_list(item, data["content"]))
+                return
+            existing = contents
         name, url, content = line(item.get("name", "Мой список")), line(item.get("url", "")), area(existing)
         fmt = combo({"text": "Текст: домен или CIDR на строку", "source": "sing-box source JSON", "srs": "sing-box SRS по HTTPS"})
         fmt.setCurrentIndex(fmt.findData("source" if existing else item.get("format", "text")))
