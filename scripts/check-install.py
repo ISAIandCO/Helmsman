@@ -44,14 +44,14 @@ try:
         else:
             raise AssertionError(status)
         assert status["guard"]
-        assert Path("/var/lib/helmsman/runtime/active-xray.json").exists()
+        assert subprocess.run(["sudo", "test", "-f", "/var/lib/helmsman/runtime/active-xray.json"]).returncode == 0
         assert Path("/sys/class/net/helmsman0").exists()
         assert subprocess.run(["sudo", "nft", "list", "table", "inet", "helmsman_guard"], stdout=subprocess.DEVNULL).returncode == 0
         print("PASS installed frozen daemon creates TUN and crash guard under systemd restrictions")
     finally:
         rpc("disconnect")
     assert not Path("/sys/class/net/helmsman0").exists()
-    assert not Path("/var/lib/helmsman/runtime/active-xray.json").exists()
+    assert subprocess.run(["sudo", "test", "-f", "/var/lib/helmsman/runtime/active-xray.json"]).returncode == 1
     assert config()["settings"] == before["settings"]
     subprocess.run([binary, "--smoke-test"], check=True, timeout=15, env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
     print("PASS packaged systemd service, unprivileged RPC/GUI and update persistence")
