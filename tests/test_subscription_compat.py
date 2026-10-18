@@ -53,6 +53,45 @@ def xray_hysteria():
 
 
 class SubscriptionCompatibilityTests(unittest.TestCase):
+    def test_stream_socket_options_and_nullable_export_blocks(self):
+        for network in ('tcp', 'ws', 'grpc', 'xhttp'):
+            source = xray_config(network)
+            stream = source['outbounds'][0]['streamSettings']
+            stream.update(sockopt={'mark': 0, 'tproxy': 'off', 'interface': '', 'dialerProxy': '', 'customSockopt': [], 'domainStrategy': 'AsIs', 'penetrate': False}, kcpSettings=None, quicSettings={}, finalmask=None, xdriveSettings=None, address=None, port=0)
+            p = parse(json.dumps(source))[0]
+            self.assertNotIn('xray_sockopt', p['outbound'])
+            options = {'tcpFastOpen': False, 'tcpKeepAliveIdle': 30, 'tcpKeepAliveInterval': 15, 'tcpMaxSeg': 1280, 'tcpUserTimeout': 10000, 'tcpWindowClamp': 65536, 'tcpCongestion': 'cubic', 'domainStrategy': 'ForceIPv4', 'happyEyeballs': {'tryDelayMs': 250, 'interleave': 1, 'maxConcurrentTry': 4, 'prioritizeIPv6': False}}
+            stream['sockopt'].update(options)
+            p = parse(json.dumps(source))[0]
+            self.assertTrue(uses_xray(p))
+            self.assertEqual(p['outbound']['xray_sockopt'], options)
+            compiled = compile_xray(p)['outbounds'][0]['streamSettings']['sockopt']
+            self.assertEqual(compiled, {**options, 'penetrate': True})
+            self.assertEqual(compile_xray(p, ipv6=False)['outbounds'][0]['streamSettings']['sockopt']['domainStrategy'], 'UseIPv4')
+            self.assertNotIn('xray_sockopt', json.dumps(compile_config(defaults(), p, '/tmp', os.getuid())))
+        source = xray_config('ws')
+        stream = source['outbounds'][0]['streamSettings']
+        stream.update(method='websocket', sockopt={'tcpcongestion': 'cubic', 'V6Only': False})
+        p = parse(json.dumps(source))[0]
+        self.assertEqual(p['outbound']['transport']['type'], 'ws')
+        self.assertEqual(p['outbound']['xray_sockopt'], {'tcpCongestion': 'cubic'})
+        stream.update(method=None, network=None, security=None, wsSettings=None, tcpSettings=None)
+        stream['sockopt'] = None
+        self.assertNotIn('transport', parse(json.dumps(source))[0]['outbound'])
+
+    def test_stream_socket_errors_name_schema_field_without_private_values(self):
+        invalid = [({'sockopt': {'dialerProxy': 'private-token'}}, 'sockopt.dialerProxy'), ({'sockopt': {'interface': 'private-token'}}, 'sockopt.interface'), ({'sockopt': {'mark': 42}}, 'sockopt.mark'), ({'sockopt': {'mark': False}}, 'sockopt.mark'), ({'sockopt': {'tcpFastOpen': 'private-token'}}, 'sockopt.tcpFastOpen'), ({'sockopt': {'customSockopt': [{'value': 'private-token'}]}}, 'sockopt.customSockopt'), ({'sockopt': {'happyEyeballs': {'maxConcurrentTry': -1}}}, 'happyEyeballs.maxConcurrentTry'), ({'sockopt': {'tcpcongestion': 'private-token'}}, 'sockopt.tcpCongestion'), ({'finalmask': {'password': 'private-token'}}, 'streamSettings.finalmask'), ({'kcpSettings': {'seed': 'private-token'}}, 'streamSettings.kcpSettings'), ({'xtlsSettings': {'password': 'private-token'}}, 'xtlsSettings'), ({'private-token': None}, 'нераспознанных полей'), ({'sockopt': {'private-token': None}}, 'нераспознанный параметр')]
+        for extra, field in invalid:
+            with self.subTest(field=field):
+                source = [xray_config() for _ in range(14)]
+                source[13]['outbounds'][0]['streamSettings'].update(extra)
+                with self.assertRaises(UserError) as error:
+                    parse(json.dumps(source))
+                message = str(error.exception)
+                self.assertIn('JSON[13].outbounds[0]', message)
+                self.assertIn(field, message)
+                self.assertNotIn('private-token', message)
+
     def test_native_extra_protocols_and_loopback_in_mixed_subscription(self):
         for modern in (True, False):
             source = xray_config()

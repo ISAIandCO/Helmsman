@@ -23,12 +23,12 @@ VPN и виртуальные сети для Steam Deck: полная наст�
 
 1. Перейдите в Desktop Mode. Если пароль пользователя ещё не задан, выполните `passwd` в Konsole.
 2. Скачайте `helmsman-<версия>-linux-x86_64.tar.gz` и `SHA256SUMS` из одного релиза. Архив содержит приложение, сервис и все сетевые движки. Decky Loader устанавливается отдельно с [официального сайта](https://decky.xyz/).
-3. В каталоге загрузки проверьте контрольную сумму нужного архива, распакуйте и установите. Для версии `0.1.0-alpha.8`:
+3. В каталоге загрузки проверьте контрольную сумму нужного архива, распакуйте и установите. Для версии `0.1.0-alpha.9`:
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
-tar -xzf helmsman-0.1.0-alpha.8-linux-x86_64.tar.gz
-cd helmsman-0.1.0-alpha.8
+tar -xzf helmsman-0.1.0-alpha.9-linux-x86_64.tar.gz
+cd helmsman-0.1.0-alpha.9
 sudo bash install.sh --decky
 ```
 
@@ -58,11 +58,13 @@ sudo bash install.sh --decky
 
 Клиентский Xray JSON может содержать VLESS, VMess, Trojan, WireGuard, Shadowsocks (включая SS2022), SOCKS5, HTTP(S) CONNECT и базовый Hysteria2 (`protocol: hysteria`, `version: 2`). Для Shadowsocks/SOCKS/HTTP принимаются как `settings.servers`, так и плоские `address/port`; учётные данные и поддерживаемые параметры TLS/транспорта сохраняются. Вспомогательные Freedom, Blackhole, DNS и Loopback не создают VPN-профилей: маршрутизацией управляет Helmsman.
 
-Неподдерживаемый узел не пропускается молча: обновление целиком сохраняет прежние профили, HWID и настройки. Ошибка указывает позицию, например `JSON[1].outbounds[2]` (индексы с нуля), и распознанный тип протокола. Приватные URL, имена узлов, ключи и пароли в сообщение не добавляются. Матрица ниже по ссылке уточняет ограничения; не каждый произвольный транспорт Xray переносим.
+Неподдерживаемый узел не пропускается молча: обновление целиком сохраняет прежние профили, HWID и настройки. Ошибка указывает позицию, например `JSON[1].outbounds[2]` (индексы с нуля), и распознанный тип протокола/неподдерживаемый параметр. Приватные URL, имена узлов, ключи и пароли в сообщение не добавляются. Матрица ниже по ссылке уточняет ограничения; не каждый произвольный транспорт Xray переносим.
+
+В `streamSettings.sockopt` принимаются TCP Fast Open, KeepAlive, UserTimeout, MaxSeg, WindowClamp, `tcpCongestion` (bbr/cubic/reno при наличии в ядре), `happyEyeballs` и стратегии разрешения адреса сервера. Они сохраняются в `xray_sockopt` и применяются через Xray. DNS/bootstrap и выключение IPv6 остаются под управлением Helmsman: `AsIs` использует выбранный bootstrap, а при выключенном IPv6 применяется `UseIPv4`. Пустые/null блоки неактивных транспортов и выключенные системные параметры не мешают импорту. Непустые `dialerProxy`, привязка интерфейса, маркировка, customSockopt, SRV/TXT-переадресация и FinalMask пока отклоняются с названием параметра. Значения параметров в ошибку не выводятся.
 
 ## XHTTP, Xray mux и WARP
 
-**XHTTP:** импортируйте `vless://…?type=xhttp…` (также `splithttp`), VMess/Trojan XHTTP или клиентский Xray JSON с `outbounds`. Доступны `auto`, `packet-up`, `stream-up`, `stream-one`, TLS/REALITY, host/path и `extra` с padding/xmux/downloadSettings. `extra` в ссылке — URL-кодированный JSON. Для редактирования используйте **Профили → Изменить**: Helmsman показывает свою нормализованную конфигурацию. Системный TUN, правила, DNS и защита остаются общими; Xray запускается для XHTTP и профилей с Xray mux и передаёт TCP/UDP через локальный SOCKS с паролем. Это один выбранный VPN, реализованный двумя процессами, а не два независимых туннеля.
+**XHTTP:** импортируйте `vless://…?type=xhttp…` (также `splithttp`), VMess/Trojan XHTTP или клиентский Xray JSON с `outbounds`. Доступны `auto`, `packet-up`, `stream-up`, `stream-one`, TLS/REALITY, host/path и `extra` с padding/xmux/downloadSettings. `extra` в ссылке — URL-кодированный JSON. Для редактирования используйте **Профили → Изменить**: Helmsman показывает свою нормализованную конфигурацию. Системный TUN, правила, DNS и защита остаются общими; Xray запускается для XHTTP, Xray mux и поддерживаемых нативных socket options и передаёт TCP/UDP через локальный SOCKS с паролем. Это один выбранный VPN, реализованный двумя процессами, а не два независимых туннеля.
 
 **Xray mux:** клиентские JSON-подписки VLESS/VMess/Trojan с `mux.enabled=true` импортируются через Xray, без подмены на несовместимый sing-box multiplex. Сохраняются `enabled`, `concurrency`, `xudpConcurrency`, `xudpProxyUDP443`; для редактирования нормализованное поле называется `xray_mux`. TCP Mux.Cool работает с TCP/raw, WebSocket, gRPC и HTTPUpgrade. У XHTTP и Vision обычный TCP Mux.Cool несовместим с закреплённым Xray: используйте `concurrency=-1` для XUDP или отключённый mux. Ошибка прямо указывает эту комбинацию и не меняет конфигурацию молча. Политика UDP/443 сохраняется: `reject` блокирует QUIC через mux, `allow` передаёт через mux, `skip` передаёт вне mux через тот же VPN.
 

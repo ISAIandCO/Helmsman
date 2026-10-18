@@ -31,7 +31,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header('x-hwid-max-devices-reached' if self.path == '/limit' else 'x-hwid-not-supported', 'true')
             self.end_headers()
             return
-        if self.path in ('/neko', '/mixed-xray', '/mixed-xray-bad'):
+        if self.path in ('/neko', '/mixed-xray', '/mixed-xray-bad', '/stream-xray', '/stream-xray-bad'):
             expected = {'x-hwid': '0123456789abcdef', 'x-device-os': 'Android', 'x-ver-os': '16', 'x-device-model': 'Test Device'}
             if any(self.headers.get(k) != v for k, v in expected.items()) or not self.headers.get('user-agent', '').startswith('v2rayNG/'):
                 self.send_response(403); self.end_headers(); return
@@ -42,6 +42,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if self.path.endswith('-bad'):
                     source['outbounds'].append({'protocol': 'shadowsocksr', 'tag': 'private-name', 'settings': {'password': 'private-password'}})
                 content = json.dumps([source]).encode()
+            if self.path.startswith('/stream-xray'):
+                source = [xray_config() for _ in range(14)]
+                for i, config in enumerate(source):
+                    config['outbounds'][0]['settings']['vnext'][0]['port'] += i
+                stream = source[13]['outbounds'][0]['streamSettings']
+                stream.update(sockopt={'tcpFastOpen': False, 'tcpKeepAliveIdle': 30, 'domainStrategy': 'AsIs'}, kcpSettings=None, quicSettings={}, finalmask=None)
+                if self.path.endswith('-bad'): stream['sockopt']['dialerProxy'] = 'private-token'
+                content = json.dumps(source).encode()
             payload = gzip.compress(base64.b64encode(content))
             self.send_response(200)
             self.send_header('Content-Encoding', 'gzip')
@@ -102,6 +110,25 @@ class HTTPSSubscriptionTests(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join()
         cls.tmp.cleanup()
+
+    def test_stream_options_hwid_update_failure_preserves_all_profiles_and_restart(self):
+        state = defaults()
+        sub = validate_subscription({'url': self.url + '/stream-xray', 'hwid_mode': 'remnawave', 'hwid_params': 'hwid=0123456789abcdef,os=Android,osVersion=16,model=Test Device'})
+        state['subscriptions'] = [sub]
+        fetch = lambda url, headers: download(url, headers, self.opener)
+        result = update(state, sub['id'], lambda _: None, fetch)
+        self.assertEqual(len(result['profiles']), 14)
+        self.assertEqual(result['profiles'][13]['outbound']['xray_sockopt'], {'tcpFastOpen': False, 'tcpKeepAliveIdle': 30})
+        result['subscriptions'][0]['url'] += '-bad'
+        before = copy.deepcopy(result)
+        with self.assertRaises(UserError) as error:
+            update(result, sub['id'], lambda _: None, fetch)
+        self.assertIn('JSON[13].outbounds[0]: Xray sockopt.dialerProxy', str(error.exception))
+        self.assertNotIn('private-token', str(error.exception))
+        self.assertEqual(result, before)
+        with tempfile.TemporaryDirectory() as root:
+            store = Store(root); store.data = result; store.save()
+            self.assertEqual(Store(root).data['profiles'], result['profiles'])
 
     def test_hwid_over_verified_https_and_transactional_failure(self):
         state = defaults()

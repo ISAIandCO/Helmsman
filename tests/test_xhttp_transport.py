@@ -75,7 +75,7 @@ class XhttpTransportTests(unittest.TestCase):
             s.server_close()
         cls.tmp.cleanup()
 
-    def exercise(self, mode, kind="vless", download=False, reality=False, network="xhttp", mux=None, native=False, method='aes-128-gcm'):
+    def exercise(self, mode, kind="vless", download=False, reality=False, network="xhttp", mux=None, native=False, method='aes-128-gcm', sockopt=None):
         server_port, client_port = port(), port()
         binary = str(Path(ENGINES) / "xray")
         settings = {"clients": [{"id": UUID}], "decryption": "none"}
@@ -142,9 +142,12 @@ class XhttpTransportTests(unittest.TestCase):
         client = compile_xray(profile(o), (client_port, "test"))
         if native:
             raw = client['outbounds'][0]
-            raw['streamSettings'].pop('sockopt')
+            raw['streamSettings']['sockopt'].update(sockopt or {})
+            raw['streamSettings'].update(kcpSettings=None, quicSettings={}, finalmask=None)
             imported = parse(json.dumps({'outbounds': [raw, {'protocol': 'loopback', 'settings': {'inboundTag': 'internal'}}]}))[0]
             client = compile_xray(imported, (client_port, 'test'))
+            for key, value in (sockopt or {}).items():
+                self.assertEqual(client['outbounds'][0]['streamSettings']['sockopt'][key], value)
         if mux is not None:
             self.assertEqual(client['outbounds'][0]['mux'], mux)
         client["log"] = {"loglevel": "debug"}
@@ -237,6 +240,11 @@ class XhttpTransportTests(unittest.TestCase):
             with self.subTest(kind=kind):
                 self.exercise('auto', kind=kind, network='tcp', native=True)
         self.exercise('auto', kind='shadowsocks', network='tcp', native=True, method='2022-blake3-aes-128-gcm')
+
+    def test_native_json_sockopt_actual_tcp_and_udp_connections(self):
+        for network in ('tcp', 'ws', 'grpc', 'xhttp'):
+            with self.subTest(network=network):
+                self.exercise('packet-up', network=network, native=True, sockopt={'tcpFastOpen': False, 'tcpKeepAliveIdle': 30, 'tcpKeepAliveInterval': 15, 'tcpUserTimeout': 10000, 'tcpMaxSeg': 1280, 'tcpWindowClamp': 65536, 'tcpCongestion': 'cubic', 'happyEyeballs': {'tryDelayMs': 250, 'maxConcurrentTry': 4}})
 
     def test_native_json_shadowsocks_socks_mux(self):
         for kind in ('shadowsocks', 'socks', 'http'):

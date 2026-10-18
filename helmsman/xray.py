@@ -1,10 +1,15 @@
-"""Bounded Xray XHTTP/mux connection data; system policy belongs to sing-box."""
+"""Bounded Xray client data; system policy belongs to sing-box."""
 import copy
 from .common import UserError
 
 EXTRA_FIELDS = set("headers xPaddingBytes xPaddingObfsMode xPaddingKey xPaddingHeader xPaddingPlacement xPaddingMethod uplinkHTTPMethod sessionIDPlacement sessionIDKey sessionIDTable sessionIDLength seqPlacement seqKey uplinkDataPlacement uplinkDataKey uplinkChunkSize noGRPCHeader noSSEHeader scMaxEachPostBytes scMinPostsIntervalMs scMaxBufferedPosts scStreamUpServerSecs serverMaxHeaderBytes xmux downloadSettings".split())
 XMUX_FIELDS = set("maxConcurrency maxConnections cMaxReuseTimes hMaxRequestTimes hMaxReusableSecs hKeepAlivePeriod".split())
 CLIENT_PROTOCOLS = {'vless', 'vmess', 'trojan', 'shadowsocks', 'socks', 'http'}
+STREAM_FIELDS = set('network method security xhttpSettings splithttpSettings tlsSettings realitySettings tcpSettings rawSettings wsSettings grpcSettings httpSettings httpupgradeSettings hysteriaSettings sockopt'.split())
+EMPTY_STREAM_FIELDS = set('address port finalmask kcpSettings quicSettings dsSettings gunSettings masqueSettings xdriveSettings xtlsSettings'.split())
+SOCKET_DEFAULTS = {'mark': (0,), 'interface': ('',), 'dialerProxy': ('',), 'tproxy': ('', 'off'), 'acceptProxyProtocol': (False,), 'trustedXForwardedFor': ([],), 'v6only': (False,), 'tcpMptcp': (False,), 'customSockopt': ([],), 'addressPortStrategy': ('', 'none'), 'penetrate': (False, True)}
+SOCKET_INTS = {'tcpFastOpen': (-2147483648, 2147483647), 'tcpKeepAliveIdle': (-2147483648, 2147483647), 'tcpKeepAliveInterval': (-2147483648, 2147483647), 'tcpUserTimeout': (0, 2147483647), 'tcpMaxSeg': (0, 65535), 'tcpWindowClamp': (0, 2147483647)}
+SOCKET_FIELDS = set(SOCKET_DEFAULTS) | set(SOCKET_INTS) | {'domainStrategy', 'tcpCongestion', 'happyEyeballs'}
 
 
 def protocol_label(value):
@@ -18,7 +23,7 @@ def is_xhttp(profile):
 
 def uses_xray(profile):
     o = profile.get("outbound", {})
-    return is_xhttp(profile) or "xray_mux" in o or (o.get('type') in {'shadowsocks', 'socks'} and bool(o.get('transport') or o.get('tls', {}).get('enabled')))
+    return is_xhttp(profile) or "xray_mux" in o or bool(o.get('xray_sockopt')) or (o.get('type') in {'shadowsocks', 'socks'} and bool(o.get('transport') or o.get('tls', {}).get('enabled')))
 
 
 def mux_settings(value):
@@ -33,12 +38,84 @@ def mux_settings(value):
     return copy.deepcopy(value)
 
 
-def only(value, fields, name):
-    if not isinstance(value, dict) or set(value) - set(fields):
-        raise UserError(name + ": неизвестные или небезопасные параметры.")
+def only(value, fields, name, known=()):
+    if not isinstance(value, dict):
+        raise UserError(name + ': нужен JSON-объект.')
+    unknown = set(value) - set(fields)
+    if unknown:
+        # Show schema names, never arbitrary provider keys or their values.
+        names = sorted(unknown & set(known))
+        if unknown - set(known): names.append('нераспознанных полей: ' + str(len(unknown - set(known))))
+        raise UserError(name + ': неподдерживаемые параметры' + (' — ' + ', '.join(names) if names else '') + '.')
+
+
+def socket_settings(value):
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise UserError('Xray sockopt: нужен JSON-объект.')
+    aliases = {f.lower(): f for f in SOCKET_FIELDS}
+    normalized = {}
+    for key, item in value.items():
+        field = aliases.get(key.lower())
+        if field is None:
+            raise UserError('Xray sockopt: нераспознанный параметр; имя и значение скрыты.')
+        if field in normalized:
+            raise UserError('Xray sockopt: повторяющийся параметр ' + field + '.')
+        normalized[field] = item
+    result = {}
+    for key, item in normalized.items():
+        if item is None:
+            continue  # Optional Go JSON fields accept null as their default.
+        if key in SOCKET_DEFAULTS:
+            defaults = SOCKET_DEFAULTS[key]
+            if type(item) is not type(defaults[0]) or item not in defaults:
+                reason = 'цепочки через другой outbound пока не поддерживаются' if key == 'dialerProxy' else 'этим системным параметром управляет Helmsman; допускается только выключенное/пустое значение'
+                raise UserError('Xray sockopt.' + key + ': ' + reason + '.')
+        elif key in SOCKET_INTS:
+            low, high = SOCKET_INTS[key]
+            if not (key == 'tcpFastOpen' and type(item) is bool) and (type(item) is not int or not low <= item <= high):
+                raise UserError('Xray sockopt.' + key + ': некорректное целое значение.')
+            result[key] = item
+        elif key == 'domainStrategy':
+            strategies = ('AsIs', 'UseIP', 'UseIPv4', 'UseIPv6', 'UseIPv4v6', 'UseIPv6v4', 'ForceIP', 'ForceIPv4', 'ForceIPv6', 'ForceIPv4v6', 'ForceIPv6v4')
+            strategy = next((s for s in strategies if isinstance(item, str) and s.lower() == item.lower()), None)
+            if strategy is None and item != '':
+                raise UserError('Xray sockopt.domainStrategy: неизвестная стратегия DNS.')
+            if strategy not in (None, 'AsIs'):
+                result[key] = strategy
+        elif key == 'tcpCongestion':
+            if item not in ('', 'bbr', 'cubic', 'reno'):
+                raise UserError('Xray sockopt.tcpCongestion: поддерживаются bbr, cubic и reno; алгоритм должен быть доступен в ядре.')
+            if item: result[key] = item
+        elif key == 'happyEyeballs':
+            only(item, {'tryDelayMs', 'prioritizeIPv6', 'interleave', 'maxConcurrentTry'}, 'Xray sockopt.happyEyeballs')
+            for field, setting in item.items():
+                maximum = {'tryDelayMs': 60000, 'interleave': 16, 'maxConcurrentTry': 64}.get(field)
+                valid = type(setting) is bool if field == 'prioritizeIPv6' else type(setting) is int and 0 <= setting <= maximum
+                if not valid:
+                    raise UserError('Xray sockopt.happyEyeballs.' + field + ': некорректное значение.')
+            if item: result[key] = copy.deepcopy(item)
+    return result
+
+
+def import_stream(value):
+    if value is None:
+        return {}
+    only(value, STREAM_FIELDS | EMPTY_STREAM_FIELDS, 'Xray streamSettings', known={'xtlsSettings', 'udpSettings', 'securitySettings'})
+    stream = {}
+    for key, item in value.items():
+        if key in EMPTY_STREAM_FIELDS:
+            default = 0 if key == 'port' else '' if key == 'address' else {}
+            if item is not None and (type(item) is not type(default) or item != default):
+                raise UserError('Xray streamSettings.' + key + ': непустой параметр пока не поддерживается; прежняя подписка сохранена.')
+        elif item is not None:
+            stream[key] = copy.deepcopy(item)
+    return stream
 
 
 def native_tls(value, reality=False):
+    if value is None: value = {}
     allowed = {"fingerprint", "serverName", "alpn", "useSystemCA", "allowInsecure"} if not reality else {"fingerprint", "serverName", "publicKey", "password", "shortId", "spiderX", "mldsa65Verify", "show"}
     only(value, allowed, "TLS/REALITY")
     if value.get("allowInsecure"):
@@ -157,7 +234,10 @@ def compile_xray(profile, proxy=None, bootstrap="9.9.9.9", ipv6=True):
                 raise UserError("VMess XHTTP: global_padding/authenticated_length не переносятся в Xray.")
         settings = {"vnext": [{"address": o["server"], "port": o["server_port"], "users": [user]}]}
     stream = stream_settings(o)
-    stream["sockopt"] = {"domainStrategy": "UseIP" if ipv6 else "UseIPv4", "penetrate": True}
+    sockopt = socket_settings(o.get('xray_sockopt'))
+    # The app owns bootstrap DNS, IPv6 policy and route-loop prevention.
+    sockopt.update(domainStrategy=sockopt.get('domainStrategy', 'UseIP') if ipv6 else 'UseIPv4', penetrate=True)
+    stream["sockopt"] = sockopt
     outbound = {"tag": "proxy", "protocol": o["type"], "settings": settings, "streamSettings": stream}
     if mux is not None:
         outbound["mux"] = mux
@@ -174,15 +254,18 @@ def import_outbound(raw):
     t = raw["protocol"]
     if not isinstance(t, str) or t not in CLIENT_PROTOCOLS | {'hysteria'}:
         raise UserError('Нативный Xray JSON: протокол «' + protocol_label(t) + '» пока не поддерживается. Выберите URI/Base64 или sing-box JSON; прежние профили сохранены.')
-    s = raw.get("streamSettings") if raw.get('streamSettings') is not None else {}
-    only(s, {"network", "method", "security", "xhttpSettings", "splithttpSettings", "tlsSettings", "realitySettings", "tcpSettings", "rawSettings", "wsSettings", "grpcSettings", "httpSettings", "httpupgradeSettings", "hysteriaSettings"}, "Xray streamSettings")
-    network = s.get('method') if s.get('method') is not None else s.get("network", "tcp")
+    s = import_stream(raw.get('streamSettings'))
+    sockopt = socket_settings(s.pop('sockopt', None))
+    network = s.get('method', s.get('network', 'tcp')).lower()
+    network = {'websocket': 'ws'}.get(network, network)
     if network not in {"tcp", "raw", "ws", "grpc", "http", "h2", "httpupgrade", "xhttp", "splithttp", "hysteria"}:
         raise UserError("Неподдерживаемый транспорт Xray JSON.")
     if t == 'http' and network not in {'tcp', 'raw'}:
         raise UserError('Xray HTTP CONNECT: поддерживаются TCP и TLS, без дополнительных транспортов.')
     settings = raw["settings"]
     if t == 'hysteria':
+        if sockopt:
+            raise UserError('Xray Hysteria2: дополнительные sockopt не переносятся; выберите hysteria2 URI или sing-box JSON.')
         only(settings, {'version', 'address', 'port'}, 'Xray Hysteria settings')
         only(s, {'network', 'method', 'security', 'tlsSettings', 'hysteriaSettings'}, 'Xray Hysteria streamSettings')
         ht = s.get('hysteriaSettings', {})
@@ -210,12 +293,14 @@ def import_outbound(raw):
     else: server_fields |= {'users', 'user', 'pass', 'level', 'email'}
     only(server, server_fields, 'Xray server')
     o = {"type": t, "server": server["address"], "server_port": server["port"]}
+    if sockopt:
+        o['xray_sockopt'] = sockopt
     if t == 'hysteria':
         o.update(type='hysteria2', password=ht.get('auth', ''))
     elif network in {"xhttp", "splithttp"}:
         o["transport"] = {"type": "xhttp", **xhttp_settings(s.get("xhttpSettings", s.get("splithttpSettings", {})))}
     elif network in {"tcp", "raw"}:
-        tcp = s.get("tcpSettings", s.get("rawSettings", {}))
+        tcp = s.get("rawSettings", s.get("tcpSettings", {}))
         only(tcp, {"header"}, "Xray TCP")
         if tcp.get("header", {"type": "none"}) != {"type": "none"}:
             raise UserError("TCP header: поддерживается только none.")
