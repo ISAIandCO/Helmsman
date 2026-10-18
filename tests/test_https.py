@@ -17,6 +17,7 @@ from pathlib import Path
 from helmsman.common import Store, UserError, defaults
 from helmsman.daemon import Controller
 from test_core import MemoryRuntime
+from test_clash import CLASH
 from helmsman.subscriptions import SafeRedirect, download, update, validate_subscription
 from test_subscription_compat import xray_config, xray_hysteria, xray_proxy
 
@@ -26,6 +27,16 @@ LINK = "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:12345#HTTPS-test"
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.server.seen.append(dict(self.headers))
+        if self.path.startswith('/negotiated'):
+            if self.headers.get('x-hwid') != '0123456789abcdef':
+                self.send_response(403); self.end_headers(); return
+            is_clash = 'Prefer ClashMeta Format' in self.headers.get('user-agent', '')
+            content = CLASH if is_clash else json.dumps(xray_config())
+            if self.path.endswith('-bad'): content = CLASH + '    private-token: private-token\n'
+            self.send_response(200)
+            self.send_header('Content-Encoding', 'gzip'); self.end_headers()
+            self.wfile.write(gzip.compress(base64.b64encode(content.encode())))
+            return
         if self.path in ('/hwid-required', '/limit'):
             self.send_response(200 if self.path == '/limit' else 404)
             self.send_header('x-hwid-max-devices-reached' if self.path == '/limit' else 'x-hwid-not-supported', 'true')
@@ -33,7 +44,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if self.path in ('/neko', '/mixed-xray', '/mixed-xray-bad', '/stream-xray', '/stream-xray-bad'):
             expected = {'x-hwid': '0123456789abcdef', 'x-device-os': 'Android', 'x-ver-os': '16', 'x-device-model': 'Test Device'}
-            if any(self.headers.get(k) != v for k, v in expected.items()) or not self.headers.get('user-agent', '').startswith('v2rayNG/'):
+            if any(self.headers.get(k) != v for k, v in expected.items()) or not self.headers.get('user-agent', '').startswith('NekoBox/Android/' if self.path == '/neko' else 'v2rayNG/'):
                 self.send_response(403); self.end_headers(); return
             content = LINK.encode()
             if self.path.startswith('/mixed-xray'):
@@ -111,9 +122,32 @@ class HTTPSSubscriptionTests(unittest.TestCase):
         cls.thread.join()
         cls.tmp.cleanup()
 
+    def test_same_url_negotiates_clash_with_saved_hwid_and_preserves_failure(self):
+        with tempfile.TemporaryDirectory() as root, patch('helmsman.subscriptions.urllib.request.build_opener', return_value=self.opener):
+            c = Controller(Store(root), MemoryRuntime(root))
+            c.call('hwid', {'value': '0123456789abcdef'})
+            saved = c.call('subscription_save', {'url': self.url + '/negotiated', 'hwid_mode': 'remnawave', 'user_agent': 'v2rayNG/1.10.5 Helmsman/0.1.0-alpha.10'})
+            c.call('subscriptions_update', saved)
+            self.assertEqual([p['outbound']['type'] for p in c.data['profiles']], ['vless', 'hysteria2'])
+            before = copy.deepcopy(c.data['profiles'])
+            c.data['subscriptions'][0]['last_attempt'] = 0
+            c.tick()
+            self.assertEqual(before, c.data['profiles'])
+            sub = dict(c.data['subscriptions'][0]); sub['user_agent'] = 'v2rayNG/1.10.5'
+            saved = c.call('subscription_save', sub)
+            c.call('subscriptions_update', saved)
+            self.assertEqual(len([p for p in c.data['profiles'] if p.get('subscription') == saved['id']]), 1)
+            c.data['subscriptions'][0]['url'] += '-bad'
+            before = copy.deepcopy(c.data['profiles'])
+            with self.assertRaises(UserError) as error: c.call('subscriptions_update', saved)
+            self.assertNotIn('private-token', str(error.exception))
+            self.assertEqual(c.data['profiles'], before)
+            self.assertEqual(Store(root).data['profiles'], before)
+            self.assertEqual(c.data['hwid'], '0123456789abcdef')
+
     def test_stream_options_hwid_update_failure_preserves_all_profiles_and_restart(self):
         state = defaults()
-        sub = validate_subscription({'url': self.url + '/stream-xray', 'hwid_mode': 'remnawave', 'hwid_params': 'hwid=0123456789abcdef,os=Android,osVersion=16,model=Test Device'})
+        sub = validate_subscription({'url': self.url + '/stream-xray', 'user_agent': 'v2rayNG/1.10.5', 'hwid_mode': 'remnawave', 'hwid_params': 'hwid=0123456789abcdef,os=Android,osVersion=16,model=Test Device'})
         state['subscriptions'] = [sub]
         fetch = lambda url, headers: download(url, headers, self.opener)
         result = update(state, sub['id'], lambda _: None, fetch)
@@ -183,7 +217,7 @@ class HTTPSSubscriptionTests(unittest.TestCase):
 
     def test_mixed_xray_json_over_verified_https_keeps_previous_profiles_on_failure(self):
         state = defaults()
-        sub = validate_subscription({'url': self.url + '/mixed-xray', 'hwid_mode': 'remnawave', 'hwid_params': 'hwid=0123456789abcdef,os=Android,osVersion=16,model=Test Device'})
+        sub = validate_subscription({'url': self.url + '/mixed-xray', 'user_agent': 'v2rayNG/1.10.5', 'hwid_mode': 'remnawave', 'hwid_params': 'hwid=0123456789abcdef,os=Android,osVersion=16,model=Test Device'})
         state['subscriptions'] = [sub]
         fetch = lambda url, headers: download(url, headers, self.opener)
         result = update(state, sub['id'], lambda _: None, fetch)

@@ -29,7 +29,7 @@ def is_xhttp(profile):
 
 def uses_xray(profile):
     o = profile.get("outbound", {})
-    return is_xhttp(profile) or "xray_mux" in o or bool(o.get('xray_sockopt') or o.get('xray_finalmask')) or (o.get('type') in {'shadowsocks', 'socks'} and bool(o.get('transport') or o.get('tls', {}).get('enabled')))
+    return is_xhttp(profile) or "xray_mux" in o or bool(o.get('xray_sockopt') or o.get('xray_finalmask') or o.get('xray_tls')) or (o.get('type') in {'shadowsocks', 'socks'} and bool(o.get('transport') or o.get('tls', {}).get('enabled')))
 
 
 def mux_settings(value):
@@ -174,13 +174,56 @@ def finalmask_settings(value):
     return result
 
 
+TLS_CLIENT = set('fingerprint serverName alpn useSystemCA allowInsecure certificates enableSessionResumption disableSystemRoot minVersion maxVersion cipherSuites curvePreferences pinnedPeerCertSha256 verifyPeerCertByName'.split())
+TLS_EMPTY = {'masterKeyLog': '', 'rejectUnknownSni': False, 'echServerKeys': '', 'echConfigList': '', 'echSockopt': {}, 'allowInsecureIfPinnedPeerCertificate': False, 'pinnedPeerCertificateChainSha256': [], 'verifyPeerCertInNames': []}
+REALITY_CLIENT = set('fingerprint serverName publicKey password shortId spiderX mldsa65Verify'.split())
+REALITY_EMPTY = {'show': False, 'masterKeyLog': '', 'target': '', 'dest': '', 'type': '', 'xver': 0, 'serverNames': [], 'privateKey': '', 'minClientVer': '', 'maxClientVer': '', 'maxTimeDiff': 0, 'shortIds': [], 'mldsa65Seed': '', 'limitFallbackUpload': {}, 'limitFallbackDownload': {}, 'spiderY': [], 'allowInsecure': False}
+
+
 def native_tls(value, reality=False):
     if value is None: value = {}
-    allowed = {"fingerprint", "serverName", "alpn", "useSystemCA", "allowInsecure"} if not reality else {"fingerprint", "serverName", "publicKey", "password", "shortId", "spiderX", "mldsa65Verify", "show"}
-    only(value, allowed, "TLS/REALITY")
-    if value.get("allowInsecure"):
-        raise UserError("Отключение проверки TLS не допускается.")
-    return copy.deepcopy(value)
+    fields, empty = (REALITY_CLIENT, REALITY_EMPTY) if reality else (TLS_CLIENT, TLS_EMPTY)
+    only(value, fields | set(empty), 'REALITY' if reality else 'TLS', known=TLS_CLIENT | REALITY_CLIENT | set(TLS_EMPTY) | set(REALITY_EMPTY))
+    result = {}
+    for key, item in value.items():
+        if item is None: continue
+        if key in empty:
+            default = empty[key]
+            if type(item) is not type(default) or item != default:
+                raise UserError('TLS/REALITY.' + key + ': активный параметр не поддерживается; прежняя подписка сохранена.')
+            continue
+        if key in {'allowInsecure', 'useSystemCA', 'enableSessionResumption', 'disableSystemRoot'}:
+            if type(item) is not bool: raise UserError('TLS.' + key + ': нужно логическое значение.')
+            if key == 'allowInsecure':
+                if item: raise UserError('Отключение проверки TLS не допускается.')
+                continue
+        elif key in {'alpn', 'curvePreferences'}:
+            if isinstance(item, str) and key == 'alpn': item = item.split(',')
+            if not isinstance(item, list) or any(not isinstance(v, str) for v in item):
+                raise UserError('TLS.' + key + ': нужен массив строк.')
+        elif key == 'certificates':
+            if not isinstance(item, list) or len(item) > 16: raise UserError('TLS.certificates: нужен массив CA.')
+            for cert in item:
+                only(cert, {'certificate', 'usage', 'certificateFile', 'keyFile', 'key', 'oneTimeLoading', 'buildChain', 'ocspStapling'}, 'TLS certificate')
+                if cert.get('usage') != 'verify' or any(cert.get(k) for k in ('certificateFile', 'keyFile', 'key', 'buildChain', 'ocspStapling')):
+                    raise UserError('TLS.certificates: поддерживается только встроенный CA с usage=verify, без ключей и файлов.')
+                if not isinstance(cert.get('certificate'), list) or not all(isinstance(line, str) for line in cert['certificate']) or '-----BEGIN CERTIFICATE-----' not in '\n'.join(cert['certificate']):
+                    raise UserError('TLS.certificates: нужен встроенный PEM CA.')
+        elif not isinstance(item, str):
+            raise UserError('TLS/REALITY.' + key + ': нужна строка.')
+        if key in {'minVersion', 'maxVersion'} and item not in ('', '1.2', '1.3'):
+            raise UserError('TLS.' + key + ': поддерживаются TLS 1.2 и 1.3.')
+        if key == 'fingerprint' and item.lower() in {'unsafe', 'hellogolang'}:
+            raise UserError('TLS.fingerprint: небезопасный fingerprint не допускается.')
+        result[key] = copy.deepcopy(item)
+    return result
+
+
+def tls_extensions(value):
+    validated = native_tls(value)
+    if set(validated) - (TLS_CLIENT - {'serverName', 'alpn', 'fingerprint', 'allowInsecure'}):
+        raise UserError('xray_tls: базовые поля задаются в tls, а не в расширениях.')
+    return validated
 
 
 def xhttp_settings(value, depth=0):
@@ -259,6 +302,9 @@ def stream_settings(outbound):
                 stream["tlsSettings"]["alpn"] = tls["alpn"]
             if tls.get("utls", {}).get("enabled"):
                 stream["tlsSettings"]["fingerprint"] = tls["utls"]["fingerprint"]
+    if outbound.get('xray_tls'):
+        if stream['security'] != 'tls': raise UserError('xray_tls: требуется обычный TLS.')
+        stream['tlsSettings'].update(tls_extensions(outbound['xray_tls']))
     return stream
 
 
@@ -435,12 +481,18 @@ def import_outbound(raw):
         if nt.get("fingerprint") or security == "reality":
             tls["utls"] = {"enabled": True, "fingerprint": nt.get("fingerprint", "chrome")}
         if security == "reality":
-            tls["reality"] = {"enabled": True, "public_key": nt.get("publicKey", nt.get("password", "")), "short_id": nt.get("shortId", "")}
+            tls["reality"] = {"enabled": True, "public_key": nt.get("password") or nt.get("publicKey", ""), "short_id": nt.get("shortId", "")}
             if network in {"xhttp", "splithttp"} or mux is not None or sockopt or masks:
                 tls["reality"]["spider_x"] = nt.get("spiderX", "")
             if nt.get("mldsa65Verify"):
                 tls["reality"]["mldsa65_verify"] = nt["mldsa65Verify"]
         o["tls"] = tls
+        if security == 'tls':
+            extras = {k: v for k, v in nt.items() if k not in {'serverName', 'alpn', 'fingerprint'} and v not in (None, '', [], False)}
+            # True is Helmsman's existing system-CA default; preserve explicit false.
+            extras.pop('useSystemCA', None)
+            if nt.get('useSystemCA') is False: extras['useSystemCA'] = False
+            if extras: o['xray_tls'] = tls_extensions(extras)
     if mux is not None and (mux.get("enabled") or set(mux) - {"enabled"}):
         o["xray_mux"] = mux
     return o

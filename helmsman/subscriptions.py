@@ -13,8 +13,15 @@ from .common import MAX_BYTES, UserError, VERSION, identifier, label
 from .importers import parse
 
 
-SUBSCRIPTION_AGENT = f"v2rayNG/1.10.5 Helmsman/{VERSION}"
+SUBSCRIPTION_AGENT = f"NekoBox/Android/2.00 (Prefer ClashMeta Format) Helmsman/{VERSION}"
 HWID_FIELDS = {"hwid": "x-hwid", "os": "x-device-os", "osversion": "x-ver-os", "model": "x-device-model"}
+
+
+def subscription_agent(value=None):
+    # Migrate only Helmsman's generated default; custom agents/headers win.
+    if not value or re.fullmatch(r'v2rayNG/1\.10\.5 Helmsman/0\.1\.0-alpha\.\d+', value):
+        return SUBSCRIPTION_AGENT
+    return value
 
 
 def hwid_parameters(text):
@@ -83,7 +90,7 @@ def download(url, headers=None, opener=None):
 
 
 def validate_subscription(s, previous=None):
-    result = {"id": previous["id"] if previous else identifier(), "name": label(s.get("name", "Подписка")), "url": https_url(s.get("url", "")), "interval_hours": float(s.get("interval_hours", 24)), "hwid_mode": s.get("hwid_mode", "none"), "hwid_name": s.get("hwid_name", "x-hwid"), "hwid": str(s.get("hwid", "")), "headers": s.get("headers", {}), "hwid_params": str(s.get("hwid_params", "")), "user_agent": str(s.get("user_agent", SUBSCRIPTION_AGENT)).strip()}
+    result = {"id": previous["id"] if previous else identifier(), "name": label(s.get("name", "Подписка")), "url": https_url(s.get("url", "")), "interval_hours": float(s.get("interval_hours", 24)), "hwid_mode": s.get("hwid_mode", "none"), "hwid_name": s.get("hwid_name", "x-hwid"), "hwid": str(s.get("hwid", "")), "headers": s.get("headers", {}), "hwid_params": str(s.get("hwid_params", "")), "user_agent": subscription_agent(str(s.get("user_agent", SUBSCRIPTION_AGENT)).strip())}
     if re.match(r"(?i)^\s*(hwid|os|osversion|model)\s*=", result["hwid"]):
         if result["hwid_params"].strip():
             raise UserError("Укажите параметры HWID в одном поле.")
@@ -119,7 +126,7 @@ def validate_subscription(s, previous=None):
 def request_data(sub, global_hwid):
     hwid = sub["hwid"] or global_hwid
     url = sub["url"]
-    headers = {"user-agent": sub.get("user_agent") or SUBSCRIPTION_AGENT, "accept": "text/plain, application/json;q=0.9, */*;q=0.8"}
+    headers = {"user-agent": subscription_agent(sub.get("user_agent")), "accept": "text/plain, application/yaml, application/json;q=0.9, */*;q=0.8"}
     mode = sub["hwid_mode"]
     if mode == "remnawave":
         params = sub.get("hwid_params", "")
@@ -157,8 +164,6 @@ def update(state, sub_id, validate_profiles, fetch=download):
         raise UserError("Сервис вернул пустую подписку. Проверьте HWID, User-Agent и срок действия; прежние профили сохранены.")
     if re.match(r"(?i)^<(?:!doctype\s+html|html|head|body)(?:\s|>)", content):
         raise UserError("Сервер вернул веб-страницу вместо подписки. Выберите User-Agent V2Ray или sing-box и проверьте URL/HWID; прежние профили сохранены.")
-    if re.search(r"(?m)^proxies:\s*", content):
-        raise UserError("Сервис вернул Clash YAML. Выберите User-Agent V2Ray для URI/Base64 или sing-box для JSON; прежние профили сохранены.")
     profiles = parse(content)
     if len(profiles) > 2000:
         raise UserError("В подписке больше 2000 профилей.")

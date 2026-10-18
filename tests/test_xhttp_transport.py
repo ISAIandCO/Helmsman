@@ -38,11 +38,11 @@ class UDP(socketserver.BaseRequestHandler):
         sock.sendto(data, self.client_address)
 
 
-def udp_echo(socks_port, target_port):
+def udp_echo(socks_port, target_port, username='helmsman'):
     with socket.create_connection(("127.0.0.1", socks_port), timeout=5) as control:
         control.sendall(b"\x05\x01\x02")
         assert receive(control, 2) == b"\x05\x02"
-        control.sendall(b"\x01\x08helmsman\x04test")
+        control.sendall(b'\x01' + bytes([len(username)]) + username.encode() + b'\x04test')
         assert receive(control, 2) == b"\x01\x00"
         control.sendall(b"\x05\x03\x00\x01\x00\x00\x00\x00\x00\x00")
         header = receive(control, 4)
@@ -76,7 +76,7 @@ class XhttpTransportTests(unittest.TestCase):
             s.server_close()
         cls.tmp.cleanup()
 
-    def exercise(self, mode, kind="vless", download=False, reality=False, network="xhttp", mux=None, native=False, method='aes-128-gcm', sockopt=None, finalmask=None, h3=False):
+    def exercise(self, mode, kind="vless", download=False, reality=False, network="xhttp", mux=None, native=False, method='aes-128-gcm', sockopt=None, finalmask=None, h3=False, clash=False, tls_extra=None):
         server_port, client_port = port(), port()
         binary = str(Path(ENGINES) / "xray")
         settings = {"clients": [{"id": UUID}], "decryption": "none"}
@@ -157,9 +157,13 @@ class XhttpTransportTests(unittest.TestCase):
             stream["realitySettings"] = {"target": "127.0.0.1:" + str(target_port), "serverNames": ["localhost"], "privateKey": private, "shortIds": ["1234"]}
             o["tls"] = {"enabled": True, "server_name": "localhost", "utls": {"enabled": True, "fingerprint": "chrome"}, "reality": {"enabled": True, "public_key": public, "short_id": "1234"}}
         client = compile_xray(profile(o), (client_port, "test"))
+        if clash:
+            imported = parse(json.dumps({'proxies': [{'name': 'Clash XHTTP', 'type': 'vless', 'server': '127.0.0.1', 'port': server_port, 'uuid': UUID, 'tls': True, 'servername': 'localhost', 'alpn': ['h2'], 'network': 'xhttp', 'xhttp-opts': {'path': '/helmsman', 'mode': mode}}]}))[0]
+            client = compile_xray(imported, (client_port, 'test'))
         if native:
             raw = client['outbounds'][0]
             raw['streamSettings']['sockopt'].update(sockopt or {})
+            if tls_extra: raw['streamSettings']['tlsSettings'].update(tls_extra)
             raw['streamSettings'].update(kcpSettings=None, quicSettings={})
             imported = parse(json.dumps({'outbounds': [raw, {'protocol': 'loopback', 'settings': {'inboundTag': 'internal'}}]}))[0]
             client = compile_xray(imported, (client_port, 'test'))
@@ -224,6 +228,12 @@ class XhttpTransportTests(unittest.TestCase):
                     p.wait()
             for log in logs:
                 log.close()
+
+    def test_clash_xhttp_and_native_tls_extensions_actual_tcp_udp(self):
+        self.exercise('packet-up', clash=True)
+        import hashlib, ssl
+        pin = hashlib.sha256(ssl.PEM_cert_to_DER_cert((self.root / 'cert').read_text())).hexdigest()
+        self.exercise('auto', network='tcp', native=True, tls_extra={'enableSessionResumption': True, 'minVersion': '1.3', 'maxVersion': '1.3', 'curvePreferences': ['X25519'], 'pinnedPeerCertSha256': pin, 'certificates': [{'usage': 'verify', 'certificate': (self.root / 'cert').read_text().splitlines()}], 'disableSystemRoot': True})
 
     def test_vless_xhttp_tls_modes_tcp_and_udp(self):
         for mode in ("auto", "packet-up", "stream-up", "stream-one"):

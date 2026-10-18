@@ -5,7 +5,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-VERSION = "0.1.0-alpha.10"
+VERSION = "0.1.0-alpha.11"
 MAX_BYTES = 8 * 1024 * 1024
 SOCKET = "/run/helmsman/control.sock"
 PRESETS = {"full": "Весь интернет через VPN", "ru-selective": "Россия: выборочно", "ru-except": "Россия напрямую", "manual": "Мои правила"}

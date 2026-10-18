@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 QT = "https://download.qt.io/archive/qt/6.9/6.9.3/submodules/"
 SOURCES = {
+    "pyyaml-6.0.3.tar.gz": ("https://files.pythonhosted.org/packages/05/8e/961c0007c59b8dd7729d542c61a4d537767a59645b82a0b521206e1e25c2/pyyaml-6.0.3.tar.gz", "d76623373421df22fb4cf8817020cbb7ef15c725b9d5e45f17e189bfc384190f"),
     "qtbase-6.9.3.tar.xz": (QT + "qtbase-everywhere-src-6.9.3.tar.xz", "c5a1a2f660356ec081febfa782998ae5ddbc5925117e64f50e4be9cd45b8dc6e"),
     "qtwayland-6.9.3.tar.xz": (QT + "qtwayland-everywhere-src-6.9.3.tar.xz", "e413d4bc9263e80a465761debf8cb8317aa6b01e814b20046a05258e6573dadd"),
     "qtsvg-6.9.3.tar.xz": (QT + "qtsvg-everywhere-src-6.9.3.tar.xz", "db76aa3358cbbe6fce7da576ff4669cb9801920188c750d3b12783bbe97026e2"),

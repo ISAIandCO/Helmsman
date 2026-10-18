@@ -14,6 +14,7 @@ from pathlib import Path
 
 from helmsman.common import defaults
 from helmsman.importers import parse, profile
+from test_xhttp_transport import udp_echo, UDP
 from test_subscription_compat import xray_hysteria, xray_proxy
 from helmsman.routing import compile_config
 from helmsman.system import receive, socks_connect
@@ -46,6 +47,9 @@ class TransportTests(unittest.TestCase):
             if os.environ.get("HELMSMAN_CI"):
                 raise
             raise unittest.SkipTest("Sandbox forbids netlink/local sockets; required in GitHub CI")
+        cls.udp = socketserver.ThreadingUDPServer(('127.0.0.1', 0), UDP)
+        cls.udp.daemon_threads = True
+        threading.Thread(target=cls.udp.serve_forever, daemon=True).start()
         cls.echo.daemon_threads = True
         cls.thread = threading.Thread(target=cls.echo.serve_forever, daemon=True)
         cls.thread.start()
@@ -57,12 +61,14 @@ class TransportTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        cls.udp.shutdown()
+        cls.udp.server_close()
         cls.echo.shutdown()
         cls.echo.server_close()
         cls.thread.join()
         cls.tmp.cleanup()
 
-    def exercise(self, kind, transport=None, native=False):
+    def exercise(self, kind, transport=None, native=False, clash=False):
         server_port, socks_port = port(), port()
         binary = Path(ENGINE_DIR) / ("sing-box-awg" if kind in {"amneziawg", "warp-amneziawg"} else "sing-box")
         t = "wireguard" if kind in {"amneziawg", "warp-amneziawg"} else kind
@@ -125,7 +131,17 @@ class TransportTests(unittest.TestCase):
             # use. Wake the server fixture too; otherwise it never binds UDP.
             server_config["inbounds"] = [{"type": "direct", "tag": "wake", "listen": "127.0.0.1", "listen_port": wake_port, "override_address": "10.211.0.2", "override_port": self.echo.server_address[1]}]
             server_config["route"]["rules"] = [{"inbound": ["wake"], "outbound": "server"}]
-        if native:
+        if clash:
+            node = {'name': 'Clash fixture', 'type': t, 'server': '127.0.0.1', 'port': server_port}
+            if t == 'vless': node.update(uuid=UUID)
+            if transport:
+                node.update(network=transport['type'])
+                node[transport['type'] + '-opts'] = {'path': transport['path']}
+            if t == 'hysteria2':
+                node.update(password='test-password', sni='localhost', certificate=self.cert, obfs='salamander', **{'obfs-password': 'fixture-obfs'})
+                server['obfs'] = {'type': 'salamander', 'password': 'fixture-obfs'}
+            p = parse(json.dumps({'proxies': [node]}))[0]
+        elif native:
             raw = xray_hysteria() if t == 'hysteria2' else xray_proxy(t)
             raw['settings'].update(address=out['server'], port=out['server_port'])
             if t == 'shadowsocks': raw['settings']['password'] = out['password']
@@ -170,6 +186,7 @@ class TransportTests(unittest.TestCase):
                     with socks_connect(socks_port, "test", "test", target, self.echo.server_address[1]) as sock:
                         sock.sendall(b"helmsman-real-transport")
                         self.assertEqual(receive(sock, 23), b"helmsman-real-transport")
+                    if clash: udp_echo(socks_port, self.udp.server_address[1], username="test")
                     return
                 except (OSError, Exception) as e:
                     last = e
@@ -194,6 +211,11 @@ class TransportTests(unittest.TestCase):
                     p.wait()
             for log in logs:
                 log.close()
+
+    def test_clash_vless_ws_and_hysteria2_salamander(self):
+        self.exercise('vless', clash=True)
+        self.exercise('vless', {'type': 'ws', 'path': '/helmsman'}, clash=True)
+        self.exercise('hysteria2', clash=True)
 
     def test_native_xray_json_shadowsocks_socks_http_and_hysteria2(self):
         for kind in ('shadowsocks', 'socks', 'http', 'hysteria2'):

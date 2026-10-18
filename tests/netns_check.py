@@ -97,7 +97,7 @@ def client():
     os.chmod(store.directory, 0o711)
     runtime = Runtime(os.environ["HELMSMAN_ENGINES"], store.directory / "runtime")
     state = store.data
-    p = parse(f"vless://{UUID}@10.90.0.1:19001")[0]
+    p = parse(json.dumps({'proxies': [{'name': 'Clash TUN fixture', 'type': 'vless', 'server': '10.90.0.1', 'port': 19001, 'uuid': UUID}]}))[0]
     p["dns"] = "198.51.100.2"
     state.update(profiles=[p], selected=p["id"], desired=True)
     state["settings"].update(lan=False, dns_bootstrap="198.51.100.2")

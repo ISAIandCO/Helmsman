@@ -13,13 +13,14 @@ Helmsman: GPL-3.0-only, см. LICENSE. Компоненты запускаютс
 | Qt / PySide6 / Shiboken6 | 6.9.3 | LGPL-3.0/GPL и лицензии Qt-модулей по upstream notices; динамические библиотеки доступны для замены. Используются QtCore/Gui/Widgets/Network; Qt Addons не импортируются |
 | ICU (в составе Qt wheel) | 73.2 | Unicode/ICU license; уведомления `packaging/licenses/ICU-73.2.txt`, [исходники](https://github.com/unicode-org/icu/tree/release-73-2) |
 | CPython | 3.12.12 в CI | PSF License; runtime в PyInstaller bundle |
+| PyYAML | 6.0.3 | MIT; безопасный YAML-парсер, исходники и лицензия включены в runtime-sources/уведомления |
 | PyInstaller | 6.16.0 | GPL-2.0 с исключением для bootloader; приложение сохраняет свою лицензию |
 | @decky/api, @decky/ui, @decky/rollup | package-lock.json | BSD-3-Clause и соответствующие notices зависимостей; runtime React предоставляется Decky, не копируется |
 | Go modules / npm build dependencies | go.sum + vendor / package-lock.json | Их собственные лицензии, сохранены в исходниках и/или app/licenses |
 
 Оба sing-box собираются с небольшой открытой правкой `patches/sing-box-doh-query.patch`: query-параметры частного DoH URL передаются как параметры, а не часть пути. Изменённый файл помечен датой; SHA256 правки записан в BUILD.json/HELMSMAN-REVISION.json, изменённые исходники входят в engine-sources. Остальные сетевые реализации взяты из закреплённых upstream commits.
 
-В `app/licenses` собраны upstream LICENSE/COPYING/NOTICE из движков и vendored зависимостей. Исходники используемых Qt-модулей, PySide6/Shiboken, CPython и PyInstaller включены в отдельный runtime-sources архив релиза; уведомления скопированы из этих исходников. Исходники Qt 6.9.3 также доступны в [официальном архиве Qt](https://download.qt.io/archive/qt/6.9/6.9.3/), PySide — в [qt-for-python](https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.9.3-src/). Пользователь может пересобрать и заменить динамические библиотеки; механизма запрета модификаций нет.
+В `app/licenses` собраны upstream LICENSE/COPYING/NOTICE из движков и vendored зависимостей. Исходники используемых Qt-модулей, PySide6/Shiboken, CPython, PyYAML и PyInstaller включены в отдельный runtime-sources архив релиза; уведомления скопированы из этих исходников. Исходники Qt 6.9.3 также доступны в [официальном архиве Qt](https://download.qt.io/archive/qt/6.9/6.9.3/), PySide — в [qt-for-python](https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.9.3-src/). Пользователь может пересобрать и заменить динамические библиотеки; механизма запрета модификаций нет.
 
 Вдохновение от NekoBox_SF, Throne, Hiddify и AmneziaVPN не означает копирование их интерфейсов или включение всех их возможностей. Самостоятельно получаемые российские списки сохраняют условия своего источника; они не встроены в бинарники и не выдаются за официальные сведения.
 

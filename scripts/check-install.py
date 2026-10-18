@@ -74,6 +74,8 @@ def check_plugin():
 try:
     subprocess.run(["sudo", "bash", str(stage / "install.sh"), "--user", user, "--decky"], check=True)
     check_plugin()
+    rpc('import', {'text': 'proxies:\n  - {name: Installed YAML, type: vless, server: 127.0.0.1, port: 9, uuid: 00000000-0000-0000-0000-000000000001}'})
+    assert config()['profiles'][0]['name'] == 'Installed YAML'
     rpc("import", {"text": json.dumps({'remarks': 'Installed mux fixture', 'outbounds': [{'protocol': 'vless',
         'settings': {'vnext': [{'address': '127.0.0.1', 'port': 9, 'users': [{'id': '00000000-0000-0000-0000-000000000001', 'encryption': 'none'}]}]},
         'streamSettings': {'network': 'tcp', 'security': 'none', 'sockopt': {'tcpFastOpen': False, 'tcpKeepAliveIdle': 30, 'tcpMaxSeg': 1280}, 'finalmask': {'tcp': [{'type': 'fragment', 'settings': {'packets': '1-3', 'length': '32-64', 'delay': '0', 'maxSplit': '3'}}]}},

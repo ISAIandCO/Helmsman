@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QFrame, QC
 from .common import MAX_BYTES, PRESETS, UserError, VERSION
 from .dns import DNS_PRESETS, resolver_url
 from .rpc import call
-from .subscriptions import SUBSCRIPTION_AGENT
+from .subscriptions import SUBSCRIPTION_AGENT, subscription_agent
 from .warp import TERMS
 from .xray import is_xhttp
 from .ui import COLORS, ListDelegate, Switch, card, disclosure, icon, label, theme
@@ -500,8 +500,8 @@ class Window(QMainWindow):
         hwid = line(sub.get("hwid", ""))
         hwid_params = area(sub.get("hwid_params", ""))
         hwid_params.setPlaceholderText("hwid=ваш_id,os=Android,osVersion=16,model=ваша модель\nПусто — HWID и описание Steam Deck. Заполнено — только перечисленные поля.")
-        user_agent = line(sub.get("user_agent", SUBSCRIPTION_AGENT))
-        user_agent.setPlaceholderText("V2Ray: v2rayNG/1.10.5; JSON: sing-box/1.14.3")
+        user_agent = line(subscription_agent(sub.get("user_agent")))
+        user_agent.setPlaceholderText("Clash Meta: NekoBox/Android/2.00; JSON: sing-box/1.14.3")
         headers = area(json.dumps(sub.get("headers", {}), ensure_ascii=False, indent=2))
         def mode_changed():
             hwid_name.setEnabled(mode.currentData() in {"header", "query"})

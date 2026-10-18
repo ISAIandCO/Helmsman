@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "helmsman-vpn"
-version = "0.1.0a10"
+version = "0.1.0a11"
 description = "Steam Deck connection manager"
 requires-python = ">=3.11"
 license = "GPL-3.0-only"
-dependencies = []
+dependencies = ["PyYAML==6.0.3"]
 
 [project.optional-dependencies]
 gui = ["PySide6==6.9.3"]
