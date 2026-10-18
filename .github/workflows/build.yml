@@ -104,13 +104,19 @@ jobs:
         with:
           name: helmsman-${{ github.sha }}
           path: release
-      - name: Publish versioned prerelease once
+      - name: Publish versioned release once
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          tag="v$(cat VERSION)"
+          version=$(cat VERSION)
+          tag="v$version"
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "Release $tag exists; bump VERSION for the next release."
             exit 0
           fi
-          gh release create "$tag" release/* --target "$GITHUB_SHA" --prerelease --latest=false --title "Helmsman $(cat VERSION)" --notes-file RELEASE_NOTES.md
+          if [[ "$version" == *-* ]]; then
+            release_flags=(--prerelease --latest=false)
+          else
+            release_flags=(--latest)
+          fi
+          gh release create "$tag" release/* --target "$GITHUB_SHA" "${release_flags[@]}" --title "Helmsman $version" --notes-file RELEASE_NOTES.md
