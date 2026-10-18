@@ -1,6 +1,6 @@
 {
   "name": "helmsman",
-  "version": "0.1.0-alpha.11",
+  "version": "0.1.0-alpha.12",
   "description": "Helmsman Steam Deck companion",
   "type": "module",
   "license": "GPL-3.0-only",

@@ -42,10 +42,12 @@ def hwid_parameters(text):
 
 def hwid_response_error(headers):
     headers = {k.lower(): str(v).lower() for k, v in headers.items()}
-    if headers.get("x-hwid-max-devices-reached") == "true" or headers.get("x-hwid-limit") == "true":
-        raise UserError("Достигнут лимит устройств подписки. Используйте зарегистрированный HWID или освободите устройство у провайдера; прежние профили сохранены.")
+    # Remnawave also sends legacy x-hwid-limit for an unsupported client.
+    # Prefer its precise reason over that ambiguous compatibility header.
     if headers.get("x-hwid-not-supported") == "true":
         raise UserError("Сервис не принял HWID. Включите передачу HWID и проверьте идентификатор и User-Agent; прежние профили сохранены.")
+    if headers.get("x-hwid-max-devices-reached") == "true" or headers.get("x-hwid-limit") == "true":
+        raise UserError("Достигнут лимит устройств подписки. Используйте зарегистрированный HWID или освободите устройство у провайдера; прежние профили сохранены.")
 
 
 def https_url(url):
@@ -167,6 +169,12 @@ def update(state, sub_id, validate_profiles, fetch=download):
     profiles = parse(content)
     if len(profiles) > 2000:
         raise UserError("В подписке больше 2000 профилей.")
+    # Remnawave fallback nodes carry a remark, not a working connection.
+    # Match the actual sentinel tuple, never an arbitrary user/profile name.
+    if any(p.get('outbound', {}).get('type') == 'vless' and
+           p['outbound'].get('server') == '0.0.0.0' and p['outbound'].get('server_port') == 1 and
+           p['outbound'].get('uuid') == '00000000-0000-0000-0000-000000000000' for p in profiles):
+        raise UserError('Сервис вернул служебный профиль вместо VPN-сервера. Проверьте HWID, User-Agent, доступ и срок подписки; прежние профили сохранены.')
     validate_profiles(profiles)
     old = {fingerprint(p): p for p in state["profiles"] if p.get("subscription") == sub_id}
     seen, added = set(), []

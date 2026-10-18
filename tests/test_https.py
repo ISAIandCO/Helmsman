@@ -11,12 +11,14 @@ import tempfile
 import threading
 import unittest
 import urllib.request
+from urllib.parse import urlencode
+from test_finalmask import MASKS
 from unittest.mock import patch
 from pathlib import Path
 
 from helmsman.common import Store, UserError, defaults
 from helmsman.daemon import Controller
-from test_core import MemoryRuntime
+from test_core import MemoryRuntime, WG
 from test_clash import CLASH
 from helmsman.subscriptions import SafeRedirect, download, update, validate_subscription
 from test_subscription_compat import xray_config, xray_hysteria, xray_proxy
@@ -27,6 +29,16 @@ LINK = "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:12345#HTTPS-test"
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.server.seen.append(dict(self.headers))
+        if self.path.startswith('/uri-finalmask'):
+            if self.headers.get('x-hwid') != '0123456789abcdef':
+                self.send_response(403); self.end_headers(); return
+            query = urlencode({'security': 'tls', 'sni': 'example.com', 'fm': json.dumps(MASKS[0])})
+            content = LINK.split('#')[0] + '?' + query
+            if self.path.endswith('-bad'): content = LINK + '\n' + LINK.split('#')[0] + '?' + urlencode({'fm': 'private-token'})
+            if self.path.endswith('-denied'): content = 'vless://00000000-0000-0000-0000-000000000000@0.0.0.0:1#App%20not%20supported'
+            self.send_response(200); self.send_header('Content-Encoding', 'gzip'); self.end_headers()
+            self.wfile.write(gzip.compress(base64.b64encode(content.encode())))
+            return
         if self.path.startswith('/negotiated'):
             if self.headers.get('x-hwid') != '0123456789abcdef':
                 self.send_response(403); self.end_headers(); return
@@ -40,6 +52,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path in ('/hwid-required', '/limit'):
             self.send_response(200 if self.path == '/limit' else 404)
             self.send_header('x-hwid-max-devices-reached' if self.path == '/limit' else 'x-hwid-not-supported', 'true')
+            self.send_header('x-hwid-limit', 'true')
             self.end_headers()
             return
         if self.path in ('/neko', '/mixed-xray', '/mixed-xray-bad', '/stream-xray', '/stream-xray-bad'):
@@ -121,6 +134,31 @@ class HTTPSSubscriptionTests(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join()
         cls.tmp.cleanup()
+
+    def test_uri_finalmask_refresh_and_denial_keep_saved_state(self):
+        with tempfile.TemporaryDirectory() as root, patch('helmsman.subscriptions.urllib.request.build_opener', return_value=self.opener):
+            c = Controller(Store(root), MemoryRuntime(root)); c.call('hwid', {'value': '0123456789abcdef'})
+            saved = c.call('subscription_save', {'url': self.url + '/uri-finalmask', 'hwid_mode': 'remnawave'})
+            c.call('subscriptions_update', saved)
+            self.assertEqual(c.data['profiles'][0]['outbound']['xray_finalmask'], MASKS[0])
+            c.call('import', {'text': WG.replace('Address=', 'Jc=2\nJmin=40\nJmax=80\nAddress=')})
+            selected = c.data['profiles'][-1]['id']
+            c.call('connect', {'profile_id': selected})
+            active = c.runtime.active
+            before = copy.deepcopy(c.data['profiles'])
+            c.data['subscriptions'][0]['last_attempt'] = 0; c.tick()
+            self.assertEqual({p['id']: p for p in c.data['profiles']}, {p['id']: p for p in before})
+            before = copy.deepcopy(c.data['profiles'])
+            for suffix, message in [('-bad', 'URI.fm'), ('-denied', 'служебный профиль')]:
+                c.data['subscriptions'][0]['url'] = self.url + '/uri-finalmask' + suffix
+                with self.assertRaisesRegex(UserError, message) as error: c.call('subscriptions_update', saved)
+                self.assertNotIn('private-token', str(error.exception))
+                self.assertEqual(c.data['profiles'], before)
+                self.assertEqual(Store(root).data['profiles'], before)
+                self.assertEqual(c.data['hwid'], '0123456789abcdef')
+                self.assertEqual(c.data['selected'], selected)
+                self.assertTrue(c.data['desired'])
+                self.assertIs(c.runtime.active, active)
 
     def test_same_url_negotiates_clash_with_saved_hwid_and_preserves_failure(self):
         with tempfile.TemporaryDirectory() as root, patch('helmsman.subscriptions.urllib.request.build_opener', return_value=self.opener):

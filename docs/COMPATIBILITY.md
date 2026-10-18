@@ -73,3 +73,15 @@ Xray JSON: дополнительно проверены Shadowsocks AEAD/SS2022
 Принимаются обычные YAML anchors/aliases с ограничениями размера/вложенности, циклы и исполняемые YAML tags отклоняются. Из полного Clash-конфига извлекаются только подключения; rules, DNS, TUN, scripts и proxy-groups не применяются. Активные interface-name/routing-mark/dialer-proxy/mptcp не переносятся. Неподдерживаемый узел отклоняет обновление целиком. Отключение проверки TLS не допускается. XHTTP принимает path/host/mode/headers и соответствующие Xray параметры padding/session/uplink/sc/reuse-settings; Clash download-settings пока не переносится (native Xray/URI extra поддерживает downloadSettings).
 
 Нативный Xray TLS дополнен клиентскими enableSessionResumption, minVersion/maxVersion (1.2/1.3), cipherSuites, curvePreferences, pinnedPeerCertSha256 (HEX SHA256), verifyPeerCertByName, disableSystemRoot/useSystemCA и встроенными certificates с usage=verify. Расширения сохраняются в xray_tls и выполняются штатным Xray. Пустые/null экспортируемые серверные и legacy TLS/REALITY поля принимаются без активации. REALITY password имеет приоритет над publicKey, как в закреплённом Xray. Файловые ключи/сертификаты, masterKeyLog, активные серверные параметры, ECH и legacy chain pinning не импортируются. Проверка движком обязательна до замены подписки.
+
+
+## FinalMask в ссылках (alpha.12)
+
+Параметр URI `fm` — percent-encoded JSON объекта FinalMask по [схеме XTLS](https://github.com/XTLS/Xray-core/discussions/716). После однократного URL-декодирования используется та же проверка и тот же xray_finalmask, что для native Xray JSON; маски не отбрасываются и не исполняются кодом Helmsman. Поддерживаются VLESS, Trojan, legacy Base64-JSON VMess и Hysteria2 с ограничениями native Xray, описанными выше. Дублирующийся fm и некорректный JSON отклоняют обновление целиком. Пустые fm/JSON null/объект без масок не включают sidecar. Лимит всего импорта 8 МиБ сохраняется. Списки URI и Base64-подписки используют тот же путь.
+
+Поля TLS URI pcs/vcn передаются в уже поддерживаемые pinnedPeerCertSha256/verifyPeerCertByName, а REALITY pqv — в mldsa65Verify. Для pcs/vcn нужен обычный TLS; они не включают его скрыто и не переносятся в REALITY. spx сохраняется также для RAW/WS/gRPC с активным fm. Hysteria2 fm не комбинируется автоматически с sing-box obfs, скоростями или hopping: требуются совместимые native Xray параметры; прежняя конфигурация при несовместимости сохраняется.
+
+Ответ Remnawave с точным служебным кортежем VLESS/0.0.0.0:1/нулевой UUID распознаётся как отказ провайдера до проверки движком и замены профилей. Одного названия «App not supported» для этого недостаточно — имена пользовательских узлов не фильтруются. x-hwid-not-supported имеет приоритет над неоднозначным legacy x-hwid-limit. Настройки и активное соединение при отказе не изменяются.
+
+
+Проверенная комбинация REALITY+fm: XHTTP с Sudoku на согласованном сервере. REALITY с мелкой TLSHello fragmentation в локальном тесте handshake не прошёл (см. TESTING.md); произвольная совместимость всех масок/транспортов не заявляется. Приложение сохраняет исходные параметры, не подменяя их рабочими значениями молча.

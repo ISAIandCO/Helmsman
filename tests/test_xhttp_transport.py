@@ -1,5 +1,7 @@
 """Actual Xray client/server TCP and UDP over XHTTP and mux, no provider account."""
 import json
+import base64
+from urllib.parse import urlencode, quote
 import os
 import re
 import socket
@@ -76,7 +78,7 @@ class XhttpTransportTests(unittest.TestCase):
             s.server_close()
         cls.tmp.cleanup()
 
-    def exercise(self, mode, kind="vless", download=False, reality=False, network="xhttp", mux=None, native=False, method='aes-128-gcm', sockopt=None, finalmask=None, h3=False, clash=False, tls_extra=None):
+    def exercise(self, mode, kind="vless", download=False, reality=False, network="xhttp", mux=None, native=False, method='aes-128-gcm', sockopt=None, finalmask=None, h3=False, clash=False, tls_extra=None, share=False):
         server_port, client_port = port(), port()
         binary = str(Path(ENGINES) / "xray")
         settings = {"clients": [{"id": UUID}], "decryption": "none"}
@@ -150,6 +152,7 @@ class XhttpTransportTests(unittest.TestCase):
             target["port"] = target_port
             target["streamSettings"]["network"] = "raw"
             target["streamSettings"].pop("xhttpSettings", None)
+            target["streamSettings"].pop("finalmask", None)  # REALITY cover target is an ordinary TLS server.
             server["inbounds"].append(target)
             stream = server["inbounds"][0]["streamSettings"]
             stream.pop("tlsSettings")
@@ -157,6 +160,24 @@ class XhttpTransportTests(unittest.TestCase):
             stream["realitySettings"] = {"target": "127.0.0.1:" + str(target_port), "serverNames": ["localhost"], "privateKey": private, "shortIds": ["1234"]}
             o["tls"] = {"enabled": True, "server_name": "localhost", "utls": {"enabled": True, "fingerprint": "chrome"}, "reality": {"enabled": True, "public_key": public, "short_id": "1234"}}
         client = compile_xray(profile(o), (client_port, "test"))
+        if share:
+            query = {'security': 'reality' if reality else 'tls', 'sni': 'localhost', 'alpn': ','.join(o['tls'].get('alpn', [])), 'fm': json.dumps(finalmask or {})}
+            if network != 'hysteria':
+                transport = o.get('transport', {})
+                query.update(type=transport.get('type', 'tcp'), path=transport.get('path', '/'), mode=mode)
+                if 'service_name' in transport: query['serviceName'] = transport['service_name']
+            if reality:
+                query.update(fp='chrome', pbk=o['tls']['reality']['public_key'], sid='1234', spx='/')
+            if tls_extra:
+                for source, target in [('pinnedPeerCertSha256', 'pcs'), ('verifyPeerCertByName', 'vcn')]:
+                    if source in tls_extra: query[target] = tls_extra[source]
+            auth = UUID if kind == 'vless' else quote(o.get('password', ''), safe='')
+            if kind == 'vmess':
+                text = 'vmess://' + base64.b64encode(json.dumps({'add': '127.0.0.1', 'port': server_port, 'id': UUID, 'net': o.get('transport', {}).get('type', 'tcp'), 'tls': 'tls', 'sni': 'localhost', 'alpn': ','.join(o['tls'].get('alpn', [])), 'fm': json.dumps(finalmask)}).encode()).decode()
+            else:
+                text = kind + '://' + auth + '@127.0.0.1:' + str(server_port) + '?' + urlencode(query)
+            imported = parse(text)[0]
+            client = compile_xray(imported, (client_port, 'test'))
         if clash:
             imported = parse(json.dumps({'proxies': [{'name': 'Clash XHTTP', 'type': 'vless', 'server': '127.0.0.1', 'port': server_port, 'uuid': UUID, 'tls': True, 'servername': 'localhost', 'alpn': ['h2'], 'network': 'xhttp', 'xhttp-opts': {'path': '/helmsman', 'mode': mode}}]}))[0]
             client = compile_xray(imported, (client_port, 'test'))
@@ -228,6 +249,18 @@ class XhttpTransportTests(unittest.TestCase):
                     p.wait()
             for log in logs:
                 log.close()
+
+    def test_uri_finalmask_actual_tcp_udp_tls_reality_and_hysteria2(self):
+        fragment = {'tcp': [{'type': 'fragment', 'settings': {'packets': 'tlshello', 'length': '40-80', 'delay': '0'}}]}
+        self.exercise('auto', network='tcp', share=True, finalmask=fragment)
+        self.exercise('packet-up', share=True, finalmask=fragment)
+        self.exercise('packet-up', share=True, reality=True, finalmask=MASKS[1])
+        self.exercise('auto', kind='trojan', network='tcp', share=True, finalmask=fragment)
+        self.exercise('auto', kind='vmess', network='tcp', share=True, finalmask=fragment)
+        self.exercise('auto', kind='hysteria2', network='hysteria', share=True, finalmask={'udp': [{'type': 'salamander', 'settings': {'password': 'fixture-password'}}]})
+        import hashlib, ssl
+        pin = hashlib.sha256(ssl.PEM_cert_to_DER_cert((self.root / 'cert').read_text())).hexdigest()
+        self.exercise('auto', network='tcp', share=True, finalmask=fragment, tls_extra={'pinnedPeerCertSha256': pin, 'verifyPeerCertByName': 'localhost'})
 
     def test_clash_xhttp_and_native_tls_extensions_actual_tcp_udp(self):
         self.exercise('packet-up', clash=True)

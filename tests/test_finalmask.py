@@ -1,5 +1,7 @@
 """Native FinalMask data contracts; Xray owns the actual network transforms."""
 import copy
+import base64
+from urllib.parse import urlencode
 import json
 import os
 import subprocess
@@ -29,6 +31,51 @@ MASKS = [
 
 
 class FinalMaskTests(unittest.TestCase):
+    def test_share_links_preserve_finalmask_and_tls_extensions(self):
+        for kind, auth in [('vless', '00000000-0000-0000-0000-000000000001'), ('trojan', 'fixture-password'), ('hysteria2', 'fixture-password')]:
+            for masks in [None, {}, *MASKS]:
+                if kind == 'hysteria2' and masks and masks.get('tcp'): continue
+                query = {'security': 'tls', 'sni': 'example.com', 'fm': json.dumps(masks)}
+                text = kind + '://' + auth + '@example.com:443?' + urlencode(query)
+                for body in (text, base64.b64encode(text.encode()).decode()):
+                    p = parse(body)[0]
+                    expected = finalmask_settings(masks)
+                    self.assertEqual(p['outbound'].get('xray_finalmask', {}), expected)
+                    if expected:
+                        self.assertTrue(uses_xray(p))
+                        self.assertEqual(compile_xray(p)['outbounds'][0]['streamSettings']['finalmask'], expected)
+        query.update(fm=json.dumps(MASKS[0]), pcs='aa' * 32, vcn='example.com,other.example.com')
+        p = parse('vless://00000000-0000-0000-0000-000000000001@example.com:443?' + urlencode(query))[0]
+        tls = compile_xray(p)['outbounds'][0]['streamSettings']['tlsSettings']
+        self.assertEqual(tls['pinnedPeerCertSha256'], 'aa' * 32)
+        self.assertEqual(tls['verifyPeerCertByName'], 'example.com,other.example.com')
+        reality = {'security': 'reality', 'sni': 'example.com', 'pbk': 'A' * 43, 'sid': '1234', 'pqv': 'B' * 2603, 'spx': '/spider', 'fm': json.dumps(MASKS[0])}
+        p = parse('vless://00000000-0000-0000-0000-000000000001@example.com:443?' + urlencode(reality))[0]
+        tls = compile_xray(p)['outbounds'][0]['streamSettings']['realitySettings']
+        self.assertEqual(tls['spiderX'], '/spider')
+        self.assertEqual(tls['mldsa65Verify'], reality['pqv'])
+        reality['fm'] = '{}'
+        inactive = parse('vless://00000000-0000-0000-0000-000000000001@example.com:443?' + urlencode(reality))[0]
+        self.assertFalse(uses_xray(inactive))
+        self.assertNotIn('spider_x', inactive['outbound']['tls']['reality'])
+        legacy = {'add': 'example.com', 'port': '443', 'id': '00000000-0000-0000-0000-000000000001', 'tls': 'tls', 'net': 'tcp', 'fm': json.dumps(MASKS[0])}
+        p = parse('vmess://' + base64.b64encode(json.dumps(legacy).encode()).decode())[0]
+        self.assertEqual(p['outbound']['xray_finalmask'], MASKS[0])
+
+    def test_invalid_uri_masks_preserve_subscription_and_hide_contents(self):
+        state = defaults(); sub = validate_subscription({'url': 'https://example.test/sub'})
+        state['subscriptions'] = [sub]
+        good = 'vless://00000000-0000-0000-0000-000000000001@example.com:443?security=tls&'
+        state = update(state, sub['id'], lambda _: None, lambda *_: good.encode())
+        for value in ('private-token', '[]', '{"private-token":1}', '{"udp":[{"type":"noise","settings":{"script":"private-token"}}]}'):
+            text = good + urlencode({'fm': value})
+            before = copy.deepcopy(state)
+            with self.assertRaises(UserError) as error: update(state, sub['id'], lambda _: None, lambda *_: text.encode())
+            self.assertIn('URI.fm', str(error.exception))
+            self.assertNotIn('private-token', str(error.exception))
+            self.assertEqual(state, before)
+        with self.assertRaisesRegex(UserError, 'несколько раз'): parse(good + 'fm=%7B%7D&fm=%7B%7D')
+
     def test_empty_export_is_noop_and_active_masks_keep_order(self):
         for masks in (None, {}, {'tcp': [], 'udp': [], 'quicParams': None}):
             source = xray_config()

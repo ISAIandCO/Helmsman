@@ -151,6 +151,8 @@ def _tls(q, required=False):
             t["reality"] = {"enabled": True, "public_key": q["pbk"], "short_id": q.get("sid", "")}
             if q.get("spx") and q.get("type") in {"xhttp", "splithttp"}:
                 t["reality"]["spider_x"] = q["spx"]
+            if q.get("pqv"):
+                t["reality"]["mldsa65_verify"] = q["pqv"]
         if q.get("insecure", q.get("allowInsecure", "0")) in {"1", "true"}:
             raise UserError("Профиль отключает проверку TLS. Исправьте сертификат сервера.")
         return t
@@ -172,16 +174,20 @@ def uri(s):
         if v.get("net", "tcp") not in {"tcp", "ws", "grpc", "http", "httpupgrade", "xhttp", "splithttp"}:
             raise UserError("VMess: неподдерживаемый транспорт.")
         q = {"type": v.get("net", "tcp"), "path": v.get("path", ""), "host": v.get("host", ""), "security": v.get("tls", "none"), "sni": v.get("sni", "")}
-        for k in ("mode", "extra", "fp", "alpn"):
+        for k in ("mode", "extra", "fp", "alpn", "fm", "pcs", "vcn", "pqv"):
             if k in v:
                 q[k] = v[k]
         o = {"type": "vmess", "server": v["add"], "server_port": int(v["port"]), "uuid": v["id"], "security": v.get("scy", "auto"), "alter_id": int(v.get("aid", 0))}
         _transport(o, q)
         if t := _tls(q):
             o["tls"] = t
+        _uri_extensions(o, q)
         return profile(o, v.get("ps", ""))
-    q = {k: v[-1] for k, v in parse_qs(u.query, keep_blank_values=True).items()}
-    known = {"security", "type", "sni", "peer", "alpn", "fp", "pbk", "sid", "spx", "flow", "encryption", "path", "host", "serviceName", "mode", "extra", "insecure", "allowInsecure", "obfs", "obfs-password", "upmbps", "downmbps", "auth", "protocol", "mport", "ports", "username", "password", "congestion_control", "udp_relay_mode", "headerType", "packetEncoding"}
+    parameters = parse_qs(u.query, keep_blank_values=True)
+    if len(parameters.get('fm', [])) > 1:
+        raise UserError('URI.fm: параметр FinalMask указан несколько раз.')
+    q = {k: v[-1] for k, v in parameters.items()}
+    known = {"security", "type", "sni", "peer", "alpn", "fp", "pbk", "sid", "spx", "flow", "encryption", "path", "host", "serviceName", "mode", "extra", "insecure", "allowInsecure", "obfs", "obfs-password", "upmbps", "downmbps", "auth", "protocol", "mport", "ports", "username", "password", "congestion_control", "udp_relay_mode", "headerType", "packetEncoding", "fm", "pcs", "vcn", "pqv"}
     if set(q) - known:
         raise UserError("Параметры ссылки требуют отдельной поддержки: " + ", ".join(sorted(set(q) - known)))
     t = {"hy2": "hysteria2", "ss": "shadowsocks", "socks5": "socks", "https": "http"}.get(u.scheme, u.scheme)
@@ -233,7 +239,31 @@ def uri(s):
             o["version"] = "5"
     if tls := _tls(q, t in {"hysteria", "hysteria2", "trojan", "tuic", "anytls"} or u.scheme == "https"):
         o["tls"] = tls
+    _uri_extensions(o, q)
     return profile(o, unquote(u.fragment))
+
+
+def _uri_extensions(outbound, query):
+    # Share-link fm is percent-encoded JSON, already decoded by parse_qs.
+    # Reuse native FinalMask validation and the existing Xray sidecar.
+    if query.get('fm') not in (None, ''):
+        try:
+            value = query['fm']
+            masks = finalmask_settings(json.loads(value) if isinstance(value, str) else value)
+        except (ValueError, TypeError, RecursionError):
+            raise UserError('URI.fm: нужен JSON-объект FinalMask; содержимое скрыто, прежняя подписка сохранена.') from None
+        except UserError as error:
+            raise UserError('URI.fm: ' + str(error)) from None
+        if masks:
+            outbound['xray_finalmask'] = masks
+            reality = outbound.get('tls', {}).get('reality', {})
+            if reality.get('enabled') and query.get('spx'): reality['spider_x'] = query['spx']
+    extras = {target: query[source] for source, target in (('pcs', 'pinnedPeerCertSha256'), ('vcn', 'verifyPeerCertByName')) if query.get(source)}
+    if extras:
+        tls = outbound.get('tls', {})
+        if not tls.get('enabled') or tls.get('reality', {}).get('enabled'):
+            raise UserError('URI pcs/vcn: параметры проверки сертификата требуют обычного TLS.')
+        outbound['xray_tls'] = tls_extensions(extras)
 
 
 def _transport(o, q):

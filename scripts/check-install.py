@@ -1,5 +1,6 @@
 """Install/update/uninstall idle packaged service on the disposable CI runner."""
 import json
+from urllib.parse import urlencode
 import os
 import runpy
 import subprocess
@@ -76,6 +77,10 @@ try:
     check_plugin()
     rpc('import', {'text': 'proxies:\n  - {name: Installed YAML, type: vless, server: 127.0.0.1, port: 9, uuid: 00000000-0000-0000-0000-000000000001}'})
     assert config()['profiles'][0]['name'] == 'Installed YAML'
+    rpc('profile_delete', {'id': config()['profiles'][0]['id']})
+    fm = {'tcp': [{'type': 'fragment', 'settings': {'packets': '1-3', 'length': '32-64', 'delay': '0'}}]}
+    rpc('import', {'text': 'vless://00000000-0000-0000-0000-000000000001@127.0.0.1:9?' + urlencode({'fm': json.dumps(fm)})})
+    assert config()['profiles'][0]['outbound']['xray_finalmask'] == fm
     rpc('profile_delete', {'id': config()['profiles'][0]['id']})
     rpc("import", {"text": json.dumps({'remarks': 'Installed mux fixture', 'outbounds': [{'protocol': 'vless',
         'settings': {'vnext': [{'address': '127.0.0.1', 'port': 9, 'users': [{'id': '00000000-0000-0000-0000-000000000001', 'encryption': 'none'}]}]},

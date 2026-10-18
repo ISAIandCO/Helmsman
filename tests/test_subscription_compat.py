@@ -53,6 +53,22 @@ def xray_hysteria():
 
 
 class SubscriptionCompatibilityTests(unittest.TestCase):
+    def test_provider_sentinel_is_denial_but_name_alone_is_not(self):
+        state = defaults(); sub = validate_subscription({'url': 'https://example.test/sub'})
+        state['subscriptions'] = [sub]
+        # The visible name is user-editable. Only the provider's exact tuple is a sentinel.
+        link = LINK.split('#')[0] + '#App%20not%20supported'
+        state = update(state, sub['id'], lambda _: None, lambda *_: link.encode())
+        self.assertEqual(len(state['profiles']), 1)
+        sentinel = {'type': 'vless', 'server': '0.0.0.0', 'server_port': 1, 'uuid': '00000000-0000-0000-0000-000000000000'}
+        cases = [json.dumps({'outbounds': [sentinel]}), 'vless://00000000-0000-0000-0000-000000000000@0.0.0.0:1#App%20not%20supported', 'proxies: [{name: App not supported, type: vless, server: 0.0.0.0, port: 1, uuid: 00000000-0000-0000-0000-000000000000}]']
+        for text in cases:
+            for body in (text.encode(), base64.b64encode(text.encode())):
+                before = copy.deepcopy(state)
+                with self.assertRaisesRegex(UserError, 'служебный профиль'):
+                    update(state, sub['id'], lambda _: self.fail('Sentinel reached engine validation'), lambda *_: body)
+                self.assertEqual(state, before)
+
     def test_stream_socket_options_and_nullable_export_blocks(self):
         for network in ('tcp', 'ws', 'grpc', 'xhttp'):
             source = xray_config(network)
