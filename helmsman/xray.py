@@ -5,11 +5,17 @@ from .common import UserError
 EXTRA_FIELDS = set("headers xPaddingBytes xPaddingObfsMode xPaddingKey xPaddingHeader xPaddingPlacement xPaddingMethod uplinkHTTPMethod sessionIDPlacement sessionIDKey sessionIDTable sessionIDLength seqPlacement seqKey uplinkDataPlacement uplinkDataKey uplinkChunkSize noGRPCHeader noSSEHeader scMaxEachPostBytes scMinPostsIntervalMs scMaxBufferedPosts scStreamUpServerSecs serverMaxHeaderBytes xmux downloadSettings".split())
 XMUX_FIELDS = set("maxConcurrency maxConnections cMaxReuseTimes hMaxRequestTimes hMaxReusableSecs hKeepAlivePeriod".split())
 CLIENT_PROTOCOLS = {'vless', 'vmess', 'trojan', 'shadowsocks', 'socks', 'http'}
-STREAM_FIELDS = set('network method security xhttpSettings splithttpSettings tlsSettings realitySettings tcpSettings rawSettings wsSettings grpcSettings httpSettings httpupgradeSettings hysteriaSettings sockopt'.split())
-EMPTY_STREAM_FIELDS = set('address port finalmask kcpSettings quicSettings dsSettings gunSettings masqueSettings xdriveSettings xtlsSettings'.split())
+STREAM_FIELDS = set('network method security xhttpSettings splithttpSettings tlsSettings realitySettings tcpSettings rawSettings wsSettings grpcSettings httpSettings httpupgradeSettings hysteriaSettings sockopt finalmask'.split())
+EMPTY_STREAM_FIELDS = set('address port kcpSettings quicSettings dsSettings gunSettings masqueSettings xdriveSettings xtlsSettings'.split())
 SOCKET_DEFAULTS = {'mark': (0,), 'interface': ('',), 'dialerProxy': ('',), 'tproxy': ('', 'off'), 'acceptProxyProtocol': (False,), 'trustedXForwardedFor': ([],), 'v6only': (False,), 'tcpMptcp': (False,), 'customSockopt': ([],), 'addressPortStrategy': ('', 'none'), 'penetrate': (False, True)}
 SOCKET_INTS = {'tcpFastOpen': (-2147483648, 2147483647), 'tcpKeepAliveIdle': (-2147483648, 2147483647), 'tcpKeepAliveInterval': (-2147483648, 2147483647), 'tcpUserTimeout': (0, 2147483647), 'tcpMaxSeg': (0, 65535), 'tcpWindowClamp': (0, 2147483647)}
 SOCKET_FIELDS = set(SOCKET_DEFAULTS) | set(SOCKET_INTS) | {'domainStrategy', 'tcpCongestion', 'happyEyeballs'}
+SUDOKU_FIELDS = set('password ascii customTable customTables paddingMin paddingMax custom_table custom_tables padding_min padding_max'.split())
+MASK_FIELDS = {
+    'tcp': {'fragment': set('packets length delay lengths delays maxSplit'.split()), 'sudoku': SUDOKU_FIELDS, 'header-custom': {'clients', 'servers', 'errors'}},
+    'udp': {'sudoku': SUDOKU_FIELDS, 'salamander': {'password', 'packetSize'}, 'mkcp-legacy': {'header', 'value'}, 'noise': {'reset', 'noise', 'script'}, 'header-custom': {'mode', 'client', 'server'}},
+}
+QUIC_FIELDS = set('congestion bbrProfile debug brutalUp brutalDown brutalDisableLossCompensation initStreamReceiveWindow maxStreamReceiveWindow initConnectionReceiveWindow maxConnectionReceiveWindow maxIdleTimeout keepAlivePeriod disablePathMTUDiscovery disableChromeParrot disableGSO maxIncomingStreams disableStatelessReset'.split())
 
 
 def protocol_label(value):
@@ -23,7 +29,7 @@ def is_xhttp(profile):
 
 def uses_xray(profile):
     o = profile.get("outbound", {})
-    return is_xhttp(profile) or "xray_mux" in o or bool(o.get('xray_sockopt')) or (o.get('type') in {'shadowsocks', 'socks'} and bool(o.get('transport') or o.get('tls', {}).get('enabled')))
+    return is_xhttp(profile) or "xray_mux" in o or bool(o.get('xray_sockopt') or o.get('xray_finalmask')) or (o.get('type') in {'shadowsocks', 'socks'} and bool(o.get('transport') or o.get('tls', {}).get('enabled')))
 
 
 def mux_settings(value):
@@ -114,6 +120,60 @@ def import_stream(value):
     return stream
 
 
+def finalmask_settings(value):
+    """Pass bounded data to native Xray; never implement masks or accept scripts."""
+    if value is None:
+        return {}
+    only(value, {'tcp', 'udp', 'quicParams'}, 'Xray streamSettings.finalmask')
+    result = {}
+    for network in ('tcp', 'udp'):
+        masks = value.get(network)
+        if masks is None:
+            continue
+        if not isinstance(masks, list) or len(masks) > 16:
+            raise UserError('Xray finalmask.' + network + ': нужен массив, не более 16 масок.')
+        for i, mask in enumerate(masks):
+            context = f'Xray finalmask.{network}[{i}]'
+            only(mask, {'type', 'settings'}, context)
+            kind = mask.get('type')
+            if not isinstance(kind, str) or kind not in MASK_FIELDS[network]:
+                label = kind if isinstance(kind, str) and kind in {'fragment', 'sudoku', 'header-custom', 'mkcp-legacy', 'noise', 'salamander', 'xdns', 'xicmp', 'realm', 'udphop', 'xmc'} else 'нераспознанная'
+                raise UserError(context + ': маска «' + label + '» не поддерживается в этом направлении.')
+            settings = copy.deepcopy(mask.get('settings')) if mask.get('settings') is not None else {}
+            only(settings, MASK_FIELDS[network][kind], context + '.' + kind, known={'script', 'transform', 'certificateFile', 'keyLog'})
+            if kind == 'noise' and settings.pop('script', None) not in (None, ''):
+                raise UserError(context + '.noise.script: импорт исполняемых скриптов не допускается; используйте список noise.')
+            sequences = []
+            if kind == 'header-custom':
+                for field in ('clients', 'servers', 'errors') if network == 'tcp' else ('client', 'server'):
+                    items = settings.get(field)
+                    if items is None: continue
+                    if not isinstance(items, list):
+                        raise UserError(context + '.header-custom.' + field + ': нужен массив.')
+                    if network == 'tcp':
+                        if any(not isinstance(sequence, list) for sequence in items):
+                            raise UserError(context + '.header-custom.' + field + ': нужен массив последовательностей.')
+                        sequences.extend(items)
+                    else:
+                        sequences.append(items)
+            elif kind == 'noise':
+                sequences.append(settings.get('noise') or [])
+            for sequence in sequences:
+                if not isinstance(sequence, list) or len(sequence) > 256:
+                    raise UserError(context + ': нужно не более 256 элементов в последовательности.')
+                for item in sequence:
+                    fields = {'delay', 'rand', 'randRange', 'type', 'packet'} | ({'capture', 'reuse', 'transform'} if kind == 'header-custom' else set())
+                    only(item, fields, context + '.' + kind + '.item', known={'capture', 'reuse', 'transform', 'script'})
+            result.setdefault(network, []).append({'type': kind, 'settings': settings})
+    quic = value.get('quicParams')
+    if quic is not None:
+        only(quic, QUIC_FIELDS, 'Xray finalmask.quicParams', known={'udpHop'})
+        if quic.get('debug') not in (None, False):
+            raise UserError('Xray finalmask.quicParams.debug: подробные логи из подписки не включаются.')
+        result['quicParams'] = copy.deepcopy(quic)
+    return result
+
+
 def native_tls(value, reality=False):
     if value is None: value = {}
     allowed = {"fingerprint", "serverName", "alpn", "useSystemCA", "allowInsecure"} if not reality else {"fingerprint", "serverName", "publicKey", "password", "shortId", "spiderX", "mldsa65Verify", "show"}
@@ -137,7 +197,7 @@ def xhttp_settings(value, depth=0):
         only(result["xmux"], XMUX_FIELDS, "XHTTP xmux")
     if "downloadSettings" in result:
         d = result["downloadSettings"]
-        only(d, {"address", "port", "network", "security", "tlsSettings", "realitySettings", "xhttpSettings", "splithttpSettings"}, "XHTTP downloadSettings")
+        only(d, {"address", "port", "network", "security", "tlsSettings", "realitySettings", "xhttpSettings", "splithttpSettings", "finalmask"}, "XHTTP downloadSettings")
         if d.get("network", "xhttp") not in {"xhttp", "splithttp"} or d.get("security", "none") not in {"none", "tls", "reality"}:
             raise UserError("downloadSettings: нужен XHTTP с TLS/REALITY или без TLS.")
         for k in ("xhttpSettings", "splithttpSettings"):
@@ -146,13 +206,21 @@ def xhttp_settings(value, depth=0):
         for k in ("tlsSettings", "realitySettings"):
             if k in d:
                 d[k] = native_tls(d[k], k == "realitySettings")
+        if 'finalmask' in d:
+            d['finalmask'] = finalmask_settings(d['finalmask'])
     return result
 
 
 def stream_settings(outbound):
     t = outbound.get("transport", {})
     network = t.get("type", "tcp")
-    if network in {"xhttp", "splithttp"}:
+    if outbound['type'] == 'hysteria2':
+        if t or any(k in outbound for k in ('up_mbps', 'down_mbps', 'obfs', 'server_ports', 'hop_interval', 'xray_mux')):
+            raise UserError('Xray Hysteria2/FinalMask: отдельный transport, mux и параметры sing-box не переносятся; используйте native Xray JSON.')
+        stream = {'network': 'hysteria', 'security': 'none', 'hysteriaSettings': {'version': 2, 'auth': outbound.get('password', '')}}
+        if not outbound.get('tls', {}).get('enabled') or outbound.get('tls', {}).get('reality'):
+            raise UserError('Xray Hysteria2: требуется TLS.')
+    elif network in {"xhttp", "splithttp"}:
         only(t, {"type", "host", "path", "mode", "extra"} | EXTRA_FIELDS, "Транспорт XHTTP")
         stream = {"network": "xhttp", "security": "none", "xhttpSettings": xhttp_settings({k: v for k, v in t.items() if k != "type"})}
     else:
@@ -201,7 +269,7 @@ def socks_outbound(proxy=None):
 
 def compile_xray(profile, proxy=None, bootstrap="9.9.9.9", ipv6=True):
     o = profile["outbound"]
-    if o["type"] not in CLIENT_PROTOCOLS:
+    if o["type"] not in CLIENT_PROTOCOLS | {'hysteria2'}:
         raise UserError("Xray: неподдерживаемый тип соединения «" + protocol_label(o['type']) + "».")
     if any(k in o for k in ("multiplex", "network", "connect_timeout", "tcp_fast_open", "udp_fragment", "udp_over_tcp")) or o.get("packet_encoding", "xudp") != "xudp":
         raise UserError("Xray: параметры multiplex/network/socket sing-box не переносятся; используйте Xray mux или XHTTP extra/xmux.")
@@ -211,7 +279,9 @@ def compile_xray(profile, proxy=None, bootstrap="9.9.9.9", ipv6=True):
     if mux and mux.get('enabled') and mux.get('concurrency', 0) >= 0 and (is_xhttp(profile) or o.get('flow', '').startswith('xtls-rprx-vision')):
         raise UserError('Xray: TCP Mux.Cool несовместим с XHTTP/Vision. В конфигурации провайдера нужен mux.concurrency=-1 или mux.enabled=false; XUDP можно сохранить. Параметры не изменены автоматически.')
     port, password = proxy or (1081, "check-only")
-    if o['type'] in {'shadowsocks', 'socks', 'http'}:
+    if o['type'] == 'hysteria2':
+        settings = {'version': 2, 'address': o['server'], 'port': o['server_port']}
+    elif o['type'] in {'shadowsocks', 'socks', 'http'}:
         server = {'address': o['server'], 'port': o['server_port']}
         if o['type'] == 'shadowsocks':
             server.update(method=o['method'], password=o['password'])
@@ -238,7 +308,9 @@ def compile_xray(profile, proxy=None, bootstrap="9.9.9.9", ipv6=True):
     # The app owns bootstrap DNS, IPv6 policy and route-loop prevention.
     sockopt.update(domainStrategy=sockopt.get('domainStrategy', 'UseIP') if ipv6 else 'UseIPv4', penetrate=True)
     stream["sockopt"] = sockopt
-    outbound = {"tag": "proxy", "protocol": o["type"], "settings": settings, "streamSettings": stream}
+    masks = finalmask_settings(o.get('xray_finalmask'))
+    if masks: stream['finalmask'] = masks
+    outbound = {"tag": "proxy", "protocol": 'hysteria' if o['type'] == 'hysteria2' else o["type"], "settings": settings, "streamSettings": stream}
     if mux is not None:
         outbound["mux"] = mux
     return {"log": {"loglevel": "none", "access": "none", "error": "none"},
@@ -256,6 +328,7 @@ def import_outbound(raw):
         raise UserError('Нативный Xray JSON: протокол «' + protocol_label(t) + '» пока не поддерживается. Выберите URI/Base64 или sing-box JSON; прежние профили сохранены.')
     s = import_stream(raw.get('streamSettings'))
     sockopt = socket_settings(s.pop('sockopt', None))
+    masks = finalmask_settings(s.pop('finalmask', None))
     network = s.get('method', s.get('network', 'tcp')).lower()
     network = {'websocket': 'ws'}.get(network, network)
     if network not in {"tcp", "raw", "ws", "grpc", "http", "h2", "httpupgrade", "xhttp", "splithttp", "hysteria"}:
@@ -264,8 +337,6 @@ def import_outbound(raw):
         raise UserError('Xray HTTP CONNECT: поддерживаются TCP и TLS, без дополнительных транспортов.')
     settings = raw["settings"]
     if t == 'hysteria':
-        if sockopt:
-            raise UserError('Xray Hysteria2: дополнительные sockopt не переносятся; выберите hysteria2 URI или sing-box JSON.')
         only(settings, {'version', 'address', 'port'}, 'Xray Hysteria settings')
         only(s, {'network', 'method', 'security', 'tlsSettings', 'hysteriaSettings'}, 'Xray Hysteria streamSettings')
         ht = s.get('hysteriaSettings', {})
@@ -295,6 +366,8 @@ def import_outbound(raw):
     o = {"type": t, "server": server["address"], "server_port": server["port"]}
     if sockopt:
         o['xray_sockopt'] = sockopt
+    if masks:
+        o['xray_finalmask'] = masks
     if t == 'hysteria':
         o.update(type='hysteria2', password=ht.get('auth', ''))
     elif network in {"xhttp", "splithttp"}:
@@ -363,7 +436,7 @@ def import_outbound(raw):
             tls["utls"] = {"enabled": True, "fingerprint": nt.get("fingerprint", "chrome")}
         if security == "reality":
             tls["reality"] = {"enabled": True, "public_key": nt.get("publicKey", nt.get("password", "")), "short_id": nt.get("shortId", "")}
-            if network in {"xhttp", "splithttp"} or mux is not None:
+            if network in {"xhttp", "splithttp"} or mux is not None or sockopt or masks:
                 tls["reality"]["spider_x"] = nt.get("spiderX", "")
             if nt.get("mldsa65Verify"):
                 tls["reality"]["mldsa65_verify"] = nt["mldsa65Verify"]

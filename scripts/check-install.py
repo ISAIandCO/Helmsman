@@ -76,7 +76,7 @@ try:
     check_plugin()
     rpc("import", {"text": json.dumps({'remarks': 'Installed mux fixture', 'outbounds': [{'protocol': 'vless',
         'settings': {'vnext': [{'address': '127.0.0.1', 'port': 9, 'users': [{'id': '00000000-0000-0000-0000-000000000001', 'encryption': 'none'}]}]},
-        'streamSettings': {'network': 'tcp', 'security': 'none', 'sockopt': {'tcpFastOpen': False, 'tcpKeepAliveIdle': 30, 'tcpMaxSeg': 1280}},
+        'streamSettings': {'network': 'tcp', 'security': 'none', 'sockopt': {'tcpFastOpen': False, 'tcpKeepAliveIdle': 30, 'tcpMaxSeg': 1280}, 'finalmask': {'tcp': [{'type': 'fragment', 'settings': {'packets': '1-3', 'length': '32-64', 'delay': '0', 'maxSplit': '3'}}]}},
         'mux': {'enabled': True, 'concurrency': 8, 'xudpConcurrency': 8, 'xudpProxyUDP443': 'skip'}}]})})
     rpc("settings_save", {"settings": {"dns_proxy": "tls://dns.google", "dns_direct": "https://dns.quad9.net/dns-query"}})
     before = config()

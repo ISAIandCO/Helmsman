@@ -47,7 +47,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 for i, config in enumerate(source):
                     config['outbounds'][0]['settings']['vnext'][0]['port'] += i
                 stream = source[13]['outbounds'][0]['streamSettings']
-                stream.update(sockopt={'tcpFastOpen': False, 'tcpKeepAliveIdle': 30, 'domainStrategy': 'AsIs'}, kcpSettings=None, quicSettings={}, finalmask=None)
+                stream.update(sockopt={'tcpFastOpen': False, 'tcpKeepAliveIdle': 30, 'domainStrategy': 'AsIs'}, kcpSettings=None, quicSettings={}, finalmask={'tcp': [{'type': 'fragment', 'settings': {'packets': 'tlshello', 'length': '40-80', 'delay': '0'}}]})
                 if self.path.endswith('-bad'): stream['sockopt']['dialerProxy'] = 'private-token'
                 content = json.dumps(source).encode()
             payload = gzip.compress(base64.b64encode(content))
@@ -119,6 +119,7 @@ class HTTPSSubscriptionTests(unittest.TestCase):
         result = update(state, sub['id'], lambda _: None, fetch)
         self.assertEqual(len(result['profiles']), 14)
         self.assertEqual(result['profiles'][13]['outbound']['xray_sockopt'], {'tcpFastOpen': False, 'tcpKeepAliveIdle': 30})
+        self.assertEqual(result['profiles'][13]['outbound']['xray_finalmask']['tcp'][0]['type'], 'fragment')
         result['subscriptions'][0]['url'] += '-bad'
         before = copy.deepcopy(result)
         with self.assertRaises(UserError) as error:

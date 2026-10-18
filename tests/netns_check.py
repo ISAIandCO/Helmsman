@@ -202,7 +202,7 @@ def client():
         print("PASS XHTTP sidecar crash stops TUN, retains guard and recovers both engines", flush=True)
         mp = parse(json.dumps({'outbounds': [{'protocol': 'vless',
             'settings': {'vnext': [{'address': '10.90.0.1', 'port': 19005, 'users': [{'id': UUID, 'encryption': 'none'}]}]},
-            'streamSettings': {'network': 'tcp', 'security': 'none', 'sockopt': {'tcpFastOpen': False, 'tcpKeepAliveIdle': 30, 'tcpMaxSeg': 1280, 'mark': 0}, 'kcpSettings': None, 'finalmask': {}},
+            'streamSettings': {'network': 'tcp', 'security': 'none', 'sockopt': {'tcpFastOpen': False, 'tcpKeepAliveIdle': 30, 'tcpMaxSeg': 1280, 'mark': 0}, 'kcpSettings': None, 'finalmask': {'tcp': [{'type': 'fragment', 'settings': {'packets': '1-3', 'length': '32-64', 'delay': '0', 'maxSplit': '3'}}]}},
             'mux': {'enabled': True, 'concurrency': 8, 'xudpConcurrency': 8, 'xudpProxyUDP443': 'skip'}}]}))[0]
         mp['dns'] = '198.51.100.2'
         controller.data['profiles'].append(mp)
@@ -228,7 +228,7 @@ def client():
         runtime.start(controller.data, mp)
         time.sleep(0.7)
         echo()
-        print('PASS native mux/socket options TUN/DNS/UDP, shared API, fail-closed sidecar crash and recovery', flush=True)
+        print('PASS native FinalMask/mux/socket options TUN/DNS/UDP, shared API, fail-closed sidecar crash and recovery', flush=True)
     finally:
         decky.request_service("disconnect", {})
         rpc_server.shutdown()

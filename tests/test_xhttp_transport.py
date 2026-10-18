@@ -15,6 +15,7 @@ from helmsman.common import UserError
 from helmsman.importers import parse, profile
 from helmsman.system import receive, socks_connect
 from helmsman.xray import compile_xray
+from test_finalmask import MASKS
 
 ENGINES = os.environ.get("HELMSMAN_ENGINES")
 UUID = "00000000-0000-0000-0000-000000000001"
@@ -75,7 +76,7 @@ class XhttpTransportTests(unittest.TestCase):
             s.server_close()
         cls.tmp.cleanup()
 
-    def exercise(self, mode, kind="vless", download=False, reality=False, network="xhttp", mux=None, native=False, method='aes-128-gcm', sockopt=None):
+    def exercise(self, mode, kind="vless", download=False, reality=False, network="xhttp", mux=None, native=False, method='aes-128-gcm', sockopt=None, finalmask=None, h3=False):
         server_port, client_port = port(), port()
         binary = str(Path(ENGINES) / "xray")
         settings = {"clients": [{"id": UUID}], "decryption": "none"}
@@ -117,12 +118,28 @@ class XhttpTransportTests(unittest.TestCase):
                 stream['httpupgradeSettings'] = {'path': '/helmsman'}
                 o['transport'] = {'type': 'httpupgrade', 'path': '/helmsman'}
                 o['tls']['alpn'] = ['http/1.1']
+        if kind == 'hysteria2':
+            o.pop('uuid')
+            o['password'] = 'test-password'
+            o['xray_finalmask'] = finalmask or {'quicParams': {'congestion': 'bbr'}}
+            stream = server['inbounds'][0]['streamSettings']
+            stream.update(network='hysteria', hysteriaSettings={'version': 2, 'auth': 'test-password'})
+            stream['tlsSettings']['alpn'] = ['h3']
+            o['tls']['alpn'] = ['h3']
+            server['inbounds'][0].update(protocol='hysteria', settings={'version': 2, 'users': [{'auth': 'test-password'}]})
         if kind == 'http':
             # Xray's HTTP inbound parses HTTP/1.1; do not advertise h2 in this fixture.
             server['inbounds'][0]['streamSettings']['tlsSettings']['alpn'] = ['http/1.1']
             o['tls']['alpn'] = ['http/1.1']
         if mux is not None:
             o['xray_mux'] = mux
+        if finalmask:
+            o['xray_finalmask'] = finalmask
+        if finalmask:
+            server['inbounds'][0]['streamSettings']['finalmask'] = finalmask
+        if h3:
+            o['tls']['alpn'] = ['h3']
+            server['inbounds'][0]['streamSettings']['tlsSettings']['alpn'] = ['h3']
         if reality:
             keys = subprocess.check_output([binary, "x25519"], text=True)
             private = re.search(r"PrivateKey: (\S+)", keys).group(1)
@@ -143,11 +160,13 @@ class XhttpTransportTests(unittest.TestCase):
         if native:
             raw = client['outbounds'][0]
             raw['streamSettings']['sockopt'].update(sockopt or {})
-            raw['streamSettings'].update(kcpSettings=None, quicSettings={}, finalmask=None)
+            raw['streamSettings'].update(kcpSettings=None, quicSettings={})
             imported = parse(json.dumps({'outbounds': [raw, {'protocol': 'loopback', 'settings': {'inboundTag': 'internal'}}]}))[0]
             client = compile_xray(imported, (client_port, 'test'))
             for key, value in (sockopt or {}).items():
                 self.assertEqual(client['outbounds'][0]['streamSettings']['sockopt'][key], value)
+        if finalmask:
+            self.assertEqual(client['outbounds'][0]['streamSettings']['finalmask'], finalmask)
         if mux is not None:
             self.assertEqual(client['outbounds'][0]['mux'], mux)
         client["log"] = {"loglevel": "debug"}
@@ -245,6 +264,18 @@ class XhttpTransportTests(unittest.TestCase):
         for network in ('tcp', 'ws', 'grpc', 'xhttp'):
             with self.subTest(network=network):
                 self.exercise('packet-up', network=network, native=True, sockopt={'tcpFastOpen': False, 'tcpKeepAliveIdle': 30, 'tcpKeepAliveInterval': 15, 'tcpUserTimeout': 10000, 'tcpMaxSeg': 1280, 'tcpWindowClamp': 65536, 'tcpCongestion': 'cubic', 'happyEyeballs': {'tryDelayMs': 250, 'maxConcurrentTry': 4}})
+
+    def test_native_finalmask_fragment_and_sudoku_tcp_udp(self):
+        for network in ('tcp', 'xhttp'):
+            with self.subTest(network=network):
+                self.exercise('packet-up', network=network, native=True, finalmask={'tcp': [{'type': 'fragment', 'settings': {'packets': 'tlshello', 'lengths': ['40-80'], 'delays': ['0'], 'maxSplit': '4'}}]})
+        self.exercise('auto', network='tcp', native=True, finalmask={'tcp': [{'type': 'sudoku', 'settings': {'password': 'fixture-password'}}]})
+        self.exercise('auto', network='tcp', native=True, finalmask=MASKS[2])
+
+    def test_native_finalmask_hysteria2_and_xhttp_h3_tcp_udp(self):
+        for kind in ('hysteria2', 'vless'):
+            with self.subTest(kind=kind):
+                self.exercise('packet-up', kind=kind, network='hysteria' if kind == 'hysteria2' else 'xhttp', native=True, h3=kind == 'vless', finalmask={'udp': [{'type': 'salamander', 'settings': {'password': 'fixture-password'}}], 'quicParams': {'congestion': 'bbr', 'maxIdleTimeout': 30}})
 
     def test_native_json_shadowsocks_socks_mux(self):
         for kind in ('shadowsocks', 'socks', 'http'):

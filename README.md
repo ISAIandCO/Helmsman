@@ -23,12 +23,12 @@ VPN и виртуальные сети для Steam Deck: полная наст�
 
 1. Перейдите в Desktop Mode. Если пароль пользователя ещё не задан, выполните `passwd` в Konsole.
 2. Скачайте `helmsman-<версия>-linux-x86_64.tar.gz` и `SHA256SUMS` из одного релиза. Архив содержит приложение, сервис и все сетевые движки. Decky Loader устанавливается отдельно с [официального сайта](https://decky.xyz/).
-3. В каталоге загрузки проверьте контрольную сумму нужного архива, распакуйте и установите. Для версии `0.1.0-alpha.9`:
+3. В каталоге загрузки проверьте контрольную сумму нужного архива, распакуйте и установите. Для версии `0.1.0-alpha.10`:
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
-tar -xzf helmsman-0.1.0-alpha.9-linux-x86_64.tar.gz
-cd helmsman-0.1.0-alpha.9
+tar -xzf helmsman-0.1.0-alpha.10-linux-x86_64.tar.gz
+cd helmsman-0.1.0-alpha.10
 sudo bash install.sh --decky
 ```
 
@@ -60,11 +60,13 @@ sudo bash install.sh --decky
 
 Неподдерживаемый узел не пропускается молча: обновление целиком сохраняет прежние профили, HWID и настройки. Ошибка указывает позицию, например `JSON[1].outbounds[2]` (индексы с нуля), и распознанный тип протокола/неподдерживаемый параметр. Приватные URL, имена узлов, ключи и пароли в сообщение не добавляются. Матрица ниже по ссылке уточняет ограничения; не каждый произвольный транспорт Xray переносим.
 
-В `streamSettings.sockopt` принимаются TCP Fast Open, KeepAlive, UserTimeout, MaxSeg, WindowClamp, `tcpCongestion` (bbr/cubic/reno при наличии в ядре), `happyEyeballs` и стратегии разрешения адреса сервера. Они сохраняются в `xray_sockopt` и применяются через Xray. DNS/bootstrap и выключение IPv6 остаются под управлением Helmsman: `AsIs` использует выбранный bootstrap, а при выключенном IPv6 применяется `UseIPv4`. Пустые/null блоки неактивных транспортов и выключенные системные параметры не мешают импорту. Непустые `dialerProxy`, привязка интерфейса, маркировка, customSockopt, SRV/TXT-переадресация и FinalMask пока отклоняются с названием параметра. Значения параметров в ошибку не выводятся.
+В `streamSettings.sockopt` принимаются TCP Fast Open, KeepAlive, UserTimeout, MaxSeg, WindowClamp, `tcpCongestion` (bbr/cubic/reno при наличии в ядре), `happyEyeballs` и стратегии разрешения адреса сервера. Они сохраняются в `xray_sockopt` и применяются через Xray. DNS/bootstrap и выключение IPv6 остаются под управлением Helmsman: `AsIs` использует выбранный bootstrap, а при выключенном IPv6 применяется `UseIPv4`. Пустые/null блоки неактивных транспортов и выключенные системные параметры не мешают импорту. Непустые `dialerProxy`, привязка интерфейса, маркировка, customSockopt и SRV/TXT-переадресация пока отклоняются с названием параметра. Значения параметров в ошибку не выводятся.
+
+**FinalMask:** клиентский Xray JSON с `streamSettings.finalmask` импортируется с сохранением порядка и поддерживаемых настроек масок. TCP: fragment, sudoku, header-custom; UDP: header-custom, mkcp-legacy, noise, salamander, sudoku; также параметры QUIC. Доступны VLESS/VMess/Trojan, Shadowsocks/SOCKS/HTTP по возможностям транспорта и нативный Hysteria2. Маски выполняет Xray; правила, DNS и защита остаются общими. Пустые `tcp: []`/`udp: []` считаются отсутствием маски. Для редактирования используется `xray_finalmask`; импорт исполняемых Lua-скриптов и сетевых масок Realm/XDNS/ICMP/UDPHop/XMC пока не поддерживается. Подробности и проверенные сочетания — в [матрице совместимости](docs/COMPATIBILITY.md).
 
 ## XHTTP, Xray mux и WARP
 
-**XHTTP:** импортируйте `vless://…?type=xhttp…` (также `splithttp`), VMess/Trojan XHTTP или клиентский Xray JSON с `outbounds`. Доступны `auto`, `packet-up`, `stream-up`, `stream-one`, TLS/REALITY, host/path и `extra` с padding/xmux/downloadSettings. `extra` в ссылке — URL-кодированный JSON. Для редактирования используйте **Профили → Изменить**: Helmsman показывает свою нормализованную конфигурацию. Системный TUN, правила, DNS и защита остаются общими; Xray запускается для XHTTP, Xray mux и поддерживаемых нативных socket options и передаёт TCP/UDP через локальный SOCKS с паролем. Это один выбранный VPN, реализованный двумя процессами, а не два независимых туннеля.
+**XHTTP:** импортируйте `vless://…?type=xhttp…` (также `splithttp`), VMess/Trojan XHTTP или клиентский Xray JSON с `outbounds`. Доступны `auto`, `packet-up`, `stream-up`, `stream-one`, TLS/REALITY, host/path и `extra` с padding/xmux/downloadSettings. `extra` в ссылке — URL-кодированный JSON. Для редактирования используйте **Профили → Изменить**: Helmsman показывает свою нормализованную конфигурацию. Системный TUN, правила, DNS и защита остаются общими; Xray запускается для XHTTP, Xray mux, FinalMask и поддерживаемых нативных socket options и передаёт TCP/UDP через локальный SOCKS с паролем. Это один выбранный VPN, реализованный двумя процессами, а не два независимых туннеля.
 
 **Xray mux:** клиентские JSON-подписки VLESS/VMess/Trojan с `mux.enabled=true` импортируются через Xray, без подмены на несовместимый sing-box multiplex. Сохраняются `enabled`, `concurrency`, `xudpConcurrency`, `xudpProxyUDP443`; для редактирования нормализованное поле называется `xray_mux`. TCP Mux.Cool работает с TCP/raw, WebSocket, gRPC и HTTPUpgrade. У XHTTP и Vision обычный TCP Mux.Cool несовместим с закреплённым Xray: используйте `concurrency=-1` для XUDP или отключённый mux. Ошибка прямо указывает эту комбинацию и не меняет конфигурацию молча. Политика UDP/443 сохраняется: `reject` блокирует QUIC через mux, `allow` передаёт через mux, `skip` передаёт вне mux через тот же VPN.
 
@@ -99,7 +101,7 @@ hwid=YOUR_DEVICE_ID,os=Android,osVersion=16,model=YOUR_DEVICE_MODEL
 
 Замените значения своими из рабочей настройки. Формат принимает запятые или отдельные строки; регистр имён не важен. Пустое поле использует общий/свой HWID и описание Steam Deck. Заполненное поле отправляет **только перечисленные параметры**, как NekoBox_SF: например, `hwid=YOUR_DEVICE_ID` не добавляет автоматически OS/model. Обычный идентификатор можно указать в поле **Свой HWID**. Составная строка, вставленная в это поле, также распознаётся.
 
-**User-Agent / формат ответа** задаётся отдельно для каждой подписки. По умолчанию используется совместимый `v2rayNG/1.10.5 Helmsman/<версия>` для списка URI/Base64; для sing-box JSON укажите `sing-box/1.14.3` либо впишите свой User-Agent. Провайдер может выбирать формат и разрешённого клиента по User-Agent. `Prefer ClashMeta Format` из стандартного User-Agent NekoBox_SF запрашивает другой формат: Clash YAML не импортируется, выберите V2Ray URI/Base64 или sing-box JSON. Это не проверка работы конкретного провайдера — его правила могут отличаться.
+**User-Agent / формат ответа** задаётся отдельно для каждой подписки. По умолчанию используется совместимый `v2rayNG/1.10.5 Helmsman/<версия>` для V2Ray URI/Base64 либо Xray JSON (по выбору провайдера); для sing-box JSON укажите `sing-box/1.14.3` либо впишите свой User-Agent. Провайдер может выбирать формат и разрешённого клиента по User-Agent. `Prefer ClashMeta Format` из стандартного User-Agent NekoBox_SF запрашивает другой формат: Clash YAML не импортируется, выберите V2Ray URI/Base64 или sing-box JSON. Это не проверка работы конкретного провайдера — его правила могут отличаться.
 
 Для дополнительных требований есть поля HTTP-заголовков, например для `Authorization`. Явные дополнительные заголовки имеют приоритет над автоматическими, независимо от регистра имени. Данные не записываются в диагностический журнал. Перенаправление на другой сервер или с HTTPS на HTTP отклоняется: укажите конечный доверенный URL. В режиме Remnawave HWID должен соответствовать ограничению панели: 10–64 латинских букв, цифр, `=` или `-`.
 
