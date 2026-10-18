@@ -94,6 +94,19 @@ def outbound(raw):
         if not isinstance(o.get("server"), str) or not o["server"] or any(c.isspace() for c in o["server"]):
             raise UserError("Не задан адрес сервера.")
         _port(o.get("server_port"))
+    if t == 'hysteria2' and 'server_ports' in o:
+        ports = [] if o['server_ports'] is None else o['server_ports']
+        if not isinstance(ports, list) or len(ports) > 256:
+            raise UserError('Hysteria2 server_ports: нужен список не более 256 портов/диапазонов.')
+        normalized = []
+        for item in ports:
+            if not isinstance(item, str) or not re.fullmatch(r'\d+(?:[:-]\d+)?', item.strip()):
+                raise UserError('Hysteria2 server_ports: нужны порты или диапазоны start:end.')
+            bounds = item.strip().replace('-', ':').split(':')
+            lo, hi = int(bounds[0]), int(bounds[-1])
+            if not 1 <= lo <= hi <= 65535: raise UserError('Hysteria2 server_ports: диапазон должен быть в пределах 1–65535.')
+            normalized.append(f'{lo}:{hi}')
+        o['server_ports'] = normalized
     if "xray_mux" in o:
         o["xray_mux"] = mux_settings(o["xray_mux"])
     if 'xray_sockopt' in o:

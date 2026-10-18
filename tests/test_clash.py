@@ -3,6 +3,9 @@ import base64
 import copy
 import json
 import unittest
+import os
+import tempfile
+from pathlib import Path
 
 from helmsman.common import UserError, defaults
 from helmsman.importers import parse
@@ -52,7 +55,7 @@ class ClashTests(unittest.TestCase):
             self.assertEqual(out[0]['packet_encoding'], 'xudp')
             self.assertFalse(uses_xray(nodes[0]))
             self.assertEqual(out[1]['obfs'], {'type': 'salamander', 'password': 'fixture-obfs'})
-            self.assertEqual(out[1]['server_ports'], ['443', '8443:8445'])
+            self.assertEqual(out[1]['server_ports'], ['443:443', '8443:8445'])
             self.assertEqual(out[1]['hop_interval'], '15s')
             self.assertEqual(out[1]['up_mbps'], 50)
             self.assertEqual(out[1]['down_mbps'], 100)
@@ -60,6 +63,14 @@ class ClashTests(unittest.TestCase):
             self.assertNotIn('utls', out[1]['tls'])
             if expected: self.assertEqual(expected, out)
             expected = out
+
+    @unittest.skipUnless(os.environ.get('HELMSMAN_ENGINES'), 'Pinned engines required')
+    def test_mixed_clash_is_accepted_by_actual_sing_box(self):
+        from helmsman.system import Runtime
+        with tempfile.TemporaryDirectory() as root:
+            Runtime(Path(os.environ['HELMSMAN_ENGINES']).resolve(), root, engine_uid=os.getuid()).validate_profiles(parse(CLASH))
+        out = parse('hysteria2://fixture-password@example.com:443?ports=443,8443-8445')[0]['outbound']
+        self.assertEqual(out['server_ports'], ['443:443', '8443:8445'])
 
     def test_clash_transports_and_anchors(self):
         root = {'proxies': []}
