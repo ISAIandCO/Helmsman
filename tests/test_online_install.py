@@ -1,10 +1,12 @@
 """Installer contracts without sudo, network access or host mount changes."""
 import copy
+import configparser
 import hashlib
 import importlib.util
 import io
 import json
 import os
+import shlex
 import subprocess
 import tarfile
 import tempfile
@@ -47,6 +49,62 @@ class OnlineInstallTests(unittest.TestCase):
         checksum = checksum or hashlib.sha256(archive).hexdigest()
         bodies = {URLS["SHA256SUMS"]: (checksum + "  " + FILENAME + "\n").encode(), URLS[FILENAME]: archive}
         return patch.object(installer, "request", side_effect=lambda url: io.BytesIO(bodies[url]))
+
+    def test_desktop_exec_download_cleanup_and_visible_terminal(self):
+        entry = configparser.ConfigParser(interpolation=None)
+        entry.read(ROOT / "Helmsman-Installer.desktop")
+        line = entry["Desktop Entry"]["Exec"]
+        # KService/KShell must receive ordinary arguments: no second layer of
+        # shell expansion or desktop-string backslash decoding is needed.
+        self.assertNotIn("\\", line)
+        self.assertNotIn("$", line)
+        command = shlex.split(line)
+        self.assertEqual(command[:5], ["konsole", "--hold", "-e", "python3", "-c"])
+        self.assertFalse(entry["Desktop Entry"].getboolean("Terminal"))
+        compile(command[5], "desktop-bootstrap", "exec")
+
+        tools = self.work / "launcher bin"; tools.mkdir()
+        konsole = tools / "konsole"
+        konsole.write_text('''#!/bin/bash
+[[ $1 == --hold && $2 == -e ]] || exit 91
+shift 2
+exec "$@"
+''')
+        konsole.chmod(0o755)
+        curl = tools / "curl"
+        curl.write_text('''#!/bin/bash
+while (($#)); do
+    if [[ $1 == --output ]]; then file=$2; shift; fi
+    shift
+done
+echo "$file" > "$LAUNCHER_TEMP"
+cp "$LAUNCHER_FIXTURE" "$file"
+exit "$LAUNCHER_DOWNLOAD_CODE"
+''')
+        curl.chmod(0o755)
+        fixture = self.work / "bootstrap fixture.py"
+        fixture.write_text('''import os,sys
+from pathlib import Path
+assert sys.stdin.readline().strip() == 'terminal input'
+Path(os.environ['LAUNCHER_CALLED']).write_text(__file__)
+sys.exit(int(os.environ['LAUNCHER_INSTALL_CODE']))
+''')
+        for shell in (False, True):
+            for download, install, code in ((0, 0, 0), (22, 0, 22), (0, 7, 7)):
+                with self.subTest(shell=shell, download=download, install=install):
+                    called = self.work / "called"; called.unlink(missing_ok=True)
+                    temporary = self.work / "temp-path"
+                    env = {**os.environ, "PATH": str(tools) + os.pathsep + os.environ["PATH"],
+                           "LAUNCHER_FIXTURE": str(fixture), "LAUNCHER_TEMP": str(temporary),
+                           "LAUNCHER_CALLED": str(called), "LAUNCHER_DOWNLOAD_CODE": str(download),
+                           "LAUNCHER_INSTALL_CODE": str(install), "TMPDIR": str(self.work)}
+                    # Both desktop argv and an Exec line pasted into a shell
+                    # must reach the same Python bootstrap without alteration.
+                    result = subprocess.run(["bash", "-c", line] if shell else command,
+                                            env=env, input="terminal input\n", text=True, capture_output=True)
+                    self.assertEqual(result.returncode, code, result.stderr)
+                    self.assertEqual(called.exists(), download == 0)
+                    self.assertFalse(Path(temporary.read_text().strip()).exists())
 
     def test_latest_stable_and_exact_assets(self):
         release = {"tag_name": "v1.0.0", "draft": False, "prerelease": False,

@@ -7,6 +7,6 @@ Comment=Download and install the latest stable Helmsman release
 Comment[ru]=Установить последнюю стабильную версию Helmsman и плагин Decky
 Icon=network-vpn
 Categories=Network;Settings;
-Exec=bash -c "tmp=\\$(mktemp /tmp/helmsman-installer-XXXXXX.py) || exit 1; trap 'rm -f -- \\"\\$tmp\\"' EXIT; if curl --fail --location --proto '=https' --proto-redir '=https' --connect-timeout 20 --max-time 120 --output \\"\\$tmp\\" https://raw.githubusercontent.com/ISAIandCO/Helmsman/main/scripts/install-latest.py && python3 \\"\\$tmp\\"; then status=0; else status=\\$?; echo \\"Installation failed. Check the message above.\\"; fi; echo; echo \\"Press Enter to close...\\"; read -r _ || true; exit \\"\\$status\\""
-Terminal=true
+Exec=konsole --hold -e python3 -c "import atexit,os,subprocess,sys,tempfile; fd,path=tempfile.mkstemp(prefix='helmsman-installer-',suffix='.py'); os.close(fd); atexit.register(os.unlink,path); code=subprocess.call(['curl','--fail','--location','--proto','=https','--proto-redir','=https','--connect-timeout','20','--max-time','120','--output',path,'https://raw.githubusercontent.com/ISAIandCO/Helmsman/main/scripts/install-latest.py']); sys.exit(code or subprocess.call([sys.executable,path]))"
+Terminal=false
 StartupNotify=false
