@@ -26,7 +26,7 @@ FIELDS = {
     "hysteria2": {"password", "up_mbps", "down_mbps", "obfs", "server_ports", "hop_interval"},
     "tuic": {"uuid", "password", "congestion_control", "udp_relay_mode", "zero_rtt_handshake", "heartbeat"},
     "anytls": {"password", "idle_session_check_interval", "idle_session_timeout", "min_idle_session"},
-    "socks": {"version", "username", "password", "udp_over_tcp"}, "http": {"username", "password"},
+    "socks": {"version", "username", "password", "udp_over_tcp"}, "http": {"username", "password", "headers"},
     "wireguard": {"system", "name", "mtu", "address", "private_key", "peers", "workers", "amnezia_wg"},
     "openvpn-client": {"mode", "servers", "remote_random", "address", "topology", "username", "password", "auth_retry", "key_direction", "cipher", "data_ciphers", "data_ciphers_fallback", "auth", "mss_fix", "ping_interval", "ping_restart", "renegotiate_interval", "explicit_exit_notify", "system", "name", "mtu", "route_no_pull"},
 }
@@ -442,7 +442,7 @@ def _amnezia(obj):
     return results
 
 
-def parse(text, depth=0):
+def parse(text, depth=0, location='JSON'):
     if depth > 3 or not isinstance(text, str) or len(text.encode()) > MAX_BYTES:
         raise UserError("Слишком большой или вложенный импорт (лимит 8 МиБ).")
     text = text.lstrip("\ufeff").strip().lstrip("\ufeff")
@@ -466,30 +466,47 @@ def parse(text, depth=0):
             obj = json.loads(text)
             if isinstance(obj, dict) and "containers" in obj:
                 return _amnezia(obj)
-            items = obj if isinstance(obj, list) else obj.get("outbounds", obj.get("endpoints", [obj]))
-            if isinstance(obj, dict) and "outbounds" in obj and "endpoints" in obj:
-                items = items + obj["endpoints"]
+            if isinstance(obj, list):
+                entries = [(f'{location}[{i}]', x) for i, x in enumerate(obj)]
+            elif isinstance(obj, dict):
+                entries = []
+                for key in ('outbounds', 'endpoints'):
+                    if key in obj:
+                        if not isinstance(obj[key], list):
+                            raise UserError(f'{location}.{key}: нужен JSON-массив.')
+                        entries.extend((f'{location}.{key}[{i}]', x) for i, x in enumerate(obj[key]))
+                if 'outbounds' not in obj and 'endpoints' not in obj:
+                    entries = [(location, obj)]
+            else:
+                raise UserError(location + ': нужен JSON-объект или массив конфигураций.')
             results = []
-            for x in items:
-                if isinstance(x, dict) and ("outbounds" in x or "endpoints" in x):
-                    nested = parse(json.dumps(x), depth + 1)
+            for path, x in entries:
+                if not isinstance(x, dict):
+                    raise UserError(path + ': нужен объект подключения.')
+                if "outbounds" in x or "endpoints" in x:
+                    nested = parse(json.dumps(x), depth + 1, path)
                     if len(nested) == 1 and x.get("remarks"):
                         nested[0]["name"] = label(x["remarks"])
                     results.extend(nested)
                     continue
-                if x.get("type") in {"direct", "block", "dns", "selector", "urltest"} or x.get("protocol") in {"freedom", "blackhole", "dns"}:
+                if x.get("type") in {"direct", "block", "dns", "selector", "urltest"} or x.get("protocol") in {"freedom", "blackhole", "dns", "loopback"}:
                     continue
-                normalized = wireguard_json(x)
-                if normalized.get("protocol"):
-                    normalized = import_outbound(normalized)
-                results.append(profile(normalized, x.get("tag", "")))
+                try:
+                    normalized = wireguard_json(x)
+                    if 'protocol' in normalized:
+                        normalized = import_outbound(normalized)
+                    results.append(profile(normalized, x.get("tag", "")))
+                except UserError as e:
+                    raise UserError(path + ': ' + str(e)) from None
+                except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
+                    raise UserError(path + ': некорректные поля подключения; проверьте формат и обязательные параметры.') from None
             if not results:
                 raise UserError("В JSON нет поддерживаемых соединений.")
             return results
         lines = [x.strip() for x in text.splitlines() if x.strip() and not x.strip().startswith("#")]
         if all("://" in line for line in lines):
             return [uri(line) for line in lines]
-        return parse(b64("".join(lines)).decode(), depth + 1)
+        return parse(b64("".join(lines)).decode(), depth + 1, location)
     except UserError:
         raise
     except (ValueError, KeyError, TypeError, UnicodeError, zlib.error, AttributeError, OverflowError):

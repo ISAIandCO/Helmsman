@@ -4,6 +4,12 @@ from .common import UserError
 
 EXTRA_FIELDS = set("headers xPaddingBytes xPaddingObfsMode xPaddingKey xPaddingHeader xPaddingPlacement xPaddingMethod uplinkHTTPMethod sessionIDPlacement sessionIDKey sessionIDTable sessionIDLength seqPlacement seqKey uplinkDataPlacement uplinkDataKey uplinkChunkSize noGRPCHeader noSSEHeader scMaxEachPostBytes scMinPostsIntervalMs scMaxBufferedPosts scStreamUpServerSecs serverMaxHeaderBytes xmux downloadSettings".split())
 XMUX_FIELDS = set("maxConcurrency maxConnections cMaxReuseTimes hMaxRequestTimes hMaxReusableSecs hKeepAlivePeriod".split())
+CLIENT_PROTOCOLS = {'vless', 'vmess', 'trojan', 'shadowsocks', 'socks', 'http'}
+
+
+def protocol_label(value):
+    # Never echo arbitrary provider text: this field can contain a private token.
+    return value if isinstance(value, str) and value in CLIENT_PROTOCOLS | {'hysteria', 'wireguard', 'loopback', 'freedom', 'blackhole', 'dns', 'shadowsocksr', 'dokodemo-door'} else 'неизвестный'
 
 
 def is_xhttp(profile):
@@ -12,7 +18,7 @@ def is_xhttp(profile):
 
 def uses_xray(profile):
     o = profile.get("outbound", {})
-    return is_xhttp(profile) or "xray_mux" in o
+    return is_xhttp(profile) or "xray_mux" in o or (o.get('type') in {'shadowsocks', 'socks'} and bool(o.get('transport') or o.get('tls', {}).get('enabled')))
 
 
 def mux_settings(value):
@@ -118,15 +124,26 @@ def socks_outbound(proxy=None):
 
 def compile_xray(profile, proxy=None, bootstrap="9.9.9.9", ipv6=True):
     o = profile["outbound"]
-    if o["type"] not in {"vless", "vmess", "trojan"}:
-        raise UserError("Xray поддерживается для VLESS, VMess и Trojan.")
-    if any(k in o for k in ("multiplex", "network", "connect_timeout", "tcp_fast_open", "udp_fragment")) or o.get("packet_encoding", "xudp") != "xudp":
+    if o["type"] not in CLIENT_PROTOCOLS:
+        raise UserError("Xray: неподдерживаемый тип соединения «" + protocol_label(o['type']) + "».")
+    if any(k in o for k in ("multiplex", "network", "connect_timeout", "tcp_fast_open", "udp_fragment", "udp_over_tcp")) or o.get("packet_encoding", "xudp") != "xudp":
         raise UserError("Xray: параметры multiplex/network/socket sing-box не переносятся; используйте Xray mux или XHTTP extra/xmux.")
+    if o['type'] == 'socks' and o.get('version', '5') != '5':
+        raise UserError('Xray: поддерживается SOCKS5.')
     mux = mux_settings(o['xray_mux']) if 'xray_mux' in o else None
     if mux and mux.get('enabled') and mux.get('concurrency', 0) >= 0 and (is_xhttp(profile) or o.get('flow', '').startswith('xtls-rprx-vision')):
         raise UserError('Xray: TCP Mux.Cool несовместим с XHTTP/Vision. В конфигурации провайдера нужен mux.concurrency=-1 или mux.enabled=false; XUDP можно сохранить. Параметры не изменены автоматически.')
     port, password = proxy or (1081, "check-only")
-    if o["type"] == "trojan":
+    if o['type'] in {'shadowsocks', 'socks', 'http'}:
+        server = {'address': o['server'], 'port': o['server_port']}
+        if o['type'] == 'shadowsocks':
+            server.update(method=o['method'], password=o['password'])
+        elif o.get('username'):
+            server['users'] = [{'user': o['username'], 'pass': o.get('password', '')}]
+        settings = {'servers': [server]}
+        if o['type'] == 'http' and o.get('headers'):
+            settings['headers'] = o['headers']
+    elif o["type"] == "trojan":
         settings = {"servers": [{"address": o["server"], "port": o["server_port"], "password": o["password"]}]}
     else:
         user = {"id": o["uuid"]}
@@ -153,24 +170,49 @@ def compile_xray(profile, proxy=None, bootstrap="9.9.9.9", ipv6=True):
 def import_outbound(raw):
     """Import one native Xray outbound, excluding routing, APIs and file paths."""
     only(raw, {"protocol", "tag", "settings", "streamSettings", "mux"}, "Xray outbound")
-    mux = mux_settings(raw["mux"]) if "mux" in raw else None
+    mux = mux_settings(raw["mux"]) if raw.get('mux') is not None else None
     t = raw["protocol"]
-    if t not in {"vless", "vmess", "trojan"}:
-        raise UserError("Нативный Xray JSON: нужен VLESS, VMess, Trojan или WireGuard.")
-    s = raw.get("streamSettings", {})
-    only(s, {"network", "security", "xhttpSettings", "splithttpSettings", "tlsSettings", "realitySettings", "tcpSettings", "rawSettings", "wsSettings", "grpcSettings", "httpSettings", "httpupgradeSettings"}, "Xray streamSettings")
-    network = s.get("network", "tcp")
-    if network not in {"tcp", "raw", "ws", "grpc", "http", "h2", "httpupgrade", "xhttp", "splithttp"}:
+    if not isinstance(t, str) or t not in CLIENT_PROTOCOLS | {'hysteria'}:
+        raise UserError('Нативный Xray JSON: протокол «' + protocol_label(t) + '» пока не поддерживается. Выберите URI/Base64 или sing-box JSON; прежние профили сохранены.')
+    s = raw.get("streamSettings") if raw.get('streamSettings') is not None else {}
+    only(s, {"network", "method", "security", "xhttpSettings", "splithttpSettings", "tlsSettings", "realitySettings", "tcpSettings", "rawSettings", "wsSettings", "grpcSettings", "httpSettings", "httpupgradeSettings", "hysteriaSettings"}, "Xray streamSettings")
+    network = s.get('method') if s.get('method') is not None else s.get("network", "tcp")
+    if network not in {"tcp", "raw", "ws", "grpc", "http", "h2", "httpupgrade", "xhttp", "splithttp", "hysteria"}:
         raise UserError("Неподдерживаемый транспорт Xray JSON.")
+    if t == 'http' and network not in {'tcp', 'raw'}:
+        raise UserError('Xray HTTP CONNECT: поддерживаются TCP и TLS, без дополнительных транспортов.')
     settings = raw["settings"]
-    only(settings, {"servers"} if t == "trojan" else {"vnext"}, "Xray settings")
-    servers = settings["servers" if t == "trojan" else "vnext"]
-    if len(servers) != 1:
+    if t == 'hysteria':
+        only(settings, {'version', 'address', 'port'}, 'Xray Hysteria settings')
+        only(s, {'network', 'method', 'security', 'tlsSettings', 'hysteriaSettings'}, 'Xray Hysteria streamSettings')
+        ht = s.get('hysteriaSettings', {})
+        only(ht, {'version', 'auth', 'udpIdleTimeout'}, 'Xray Hysteria transport')
+        if settings.get('version') != 2 or ht.get('version') != 2 or network != 'hysteria' or s.get('security') != 'tls':
+            raise UserError('Xray Hysteria: нужен version=2, транспорт Hysteria2 и TLS; Hysteria1 импортируется отдельной ссылкой.')
+        if ht.get('udpIdleTimeout', 60) not in (0, 60) or (mux and (mux.get('enabled') or set(mux) - {'enabled'})):
+            raise UserError('Xray Hysteria2: нестандартный UDP idle timeout или mux не переносятся; выберите hysteria2 URI или sing-box JSON.')
+        servers = [settings]
+    elif t in {'shadowsocks', 'socks', 'http'}:
+        connection_fields = {'address', 'port', 'level', 'email'} | ({'method', 'password'} if t == 'shadowsocks' else {'user', 'pass'})
+        only(settings, connection_fields | {'servers'} | ({'headers'} if t == 'http' else set()), 'Xray settings')
+        servers = [{k: v for k, v in settings.items() if k in connection_fields}] if settings.get('address') is not None else settings['servers']
+    else:
+        only(settings, {"servers"} if t == "trojan" else {"vnext"}, "Xray settings")
+        servers = settings["servers" if t == "trojan" else "vnext"]
+    if not isinstance(servers, list) or len(servers) != 1:
         raise UserError("Xray: в одном профиле нужен один сервер.")
     server = servers[0]
-    only(server, {"address", "port", "password"} if t == "trojan" else {"address", "port", "users"}, "Xray server")
+    server_fields = {'address', 'port'}
+    if t in {'vless', 'vmess'}: server_fields |= {'users'}
+    elif t == 'hysteria': server_fields |= {'version'}
+    elif t == 'trojan': server_fields |= {'password'}
+    elif t == 'shadowsocks': server_fields |= {'method', 'password', 'level', 'email'}
+    else: server_fields |= {'users', 'user', 'pass', 'level', 'email'}
+    only(server, server_fields, 'Xray server')
     o = {"type": t, "server": server["address"], "server_port": server["port"]}
-    if network in {"xhttp", "splithttp"}:
+    if t == 'hysteria':
+        o.update(type='hysteria2', password=ht.get('auth', ''))
+    elif network in {"xhttp", "splithttp"}:
         o["transport"] = {"type": "xhttp", **xhttp_settings(s.get("xhttpSettings", s.get("splithttpSettings", {})))}
     elif network in {"tcp", "raw"}:
         tcp = s.get("tcpSettings", s.get("rawSettings", {}))
@@ -196,7 +238,21 @@ def import_outbound(raw):
             only(settings_transport, {"path", "host"}, "Xray HTTP")
             transport.update(path=settings_transport.get("path", "/"), host=settings_transport.get("host", [] if network in {"http", "h2"} else ""))
         o["transport"] = transport
-    if t == "trojan":
+    if t == 'hysteria':
+        pass  # Authentication belongs to hysteriaSettings, not the proxy user.
+    elif t == 'shadowsocks':
+        o.update(method={'chacha20-poly1305': 'chacha20-ietf-poly1305', 'xchacha20-poly1305': 'xchacha20-ietf-poly1305', 'aead_aes_128_gcm': 'aes-128-gcm', 'aead_aes_256_gcm': 'aes-256-gcm', 'aead_chacha20_poly1305': 'chacha20-ietf-poly1305', 'aead_xchacha20_poly1305': 'xchacha20-ietf-poly1305'}.get(server['method'], server['method']), password=server['password'])
+    elif t in {'socks', 'http'}:
+        users = server.get('users') if server.get('users') is not None else []
+        if not isinstance(users, list) or len(users) > 1:
+            raise UserError('Xray: нужен не более чем один пользователь сервера.')
+        user = server if settings.get('address') is not None else users[0] if users else {}
+        only(user, server_fields if user is server else {'user', 'pass', 'level', 'email'}, 'Xray proxy user')
+        if user.get('user'):
+            o.update(username=user['user'], password=user.get('pass', ''))
+        if t == 'socks': o['version'] = '5'
+        elif settings.get('headers') is not None: o['headers'] = copy.deepcopy(settings['headers'])
+    elif t == "trojan":
         o["password"] = server["password"]
     else:
         if len(server["users"]) != 1:

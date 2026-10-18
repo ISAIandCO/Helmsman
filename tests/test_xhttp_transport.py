@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 
 from helmsman.common import UserError
-from helmsman.importers import profile
+from helmsman.importers import parse, profile
 from helmsman.system import receive, socks_connect
 from helmsman.xray import compile_xray
 
@@ -75,7 +75,7 @@ class XhttpTransportTests(unittest.TestCase):
             s.server_close()
         cls.tmp.cleanup()
 
-    def exercise(self, mode, kind="vless", download=False, reality=False, network="xhttp", mux=None):
+    def exercise(self, mode, kind="vless", download=False, reality=False, network="xhttp", mux=None, native=False, method='aes-128-gcm'):
         server_port, client_port = port(), port()
         binary = str(Path(ENGINES) / "xray")
         settings = {"clients": [{"id": UUID}], "decryption": "none"}
@@ -86,6 +86,18 @@ class XhttpTransportTests(unittest.TestCase):
             settings = {"clients": [{"password": "test-password"}]}
             o.pop("uuid")
             o["password"] = "test-password"
+        if kind in {'shadowsocks', 'socks', 'http'}:
+            o.pop('uuid')
+            if kind == 'shadowsocks':
+                password = 'AAECAwQFBgcICQoLDA0ODw==' if method.startswith('2022-') else 'test-password'
+                settings = {'method': method, 'password': password, 'network': 'tcp,udp'}
+                o.update(method=method, password=password)
+            else:
+                settings = {'accounts': [{'user': 'fixture-user', 'pass': 'fixture-password'}]}
+                o.update(username='fixture-user', password='fixture-password')
+                if kind == 'socks':
+                    settings.update(auth='password', udp=True, ip='127.0.0.1')
+                    o['version'] = '5'
         if download:
             o["transport"]["extra"] = {"downloadSettings": {"address": "download.fixture", "port": server_port, "network": "xhttp", "security": "tls", "tlsSettings": {"serverName": "localhost", "alpn": ["h2"], "useSystemCA": True}, "xhttpSettings": {"path": "/helmsman", "mode": mode}}}
         server = {"log": {"loglevel": "debug"}, "inbounds": [{"listen": "127.0.0.1", "port": server_port, "protocol": kind, "settings": settings, "streamSettings": {"network": "xhttp", "xhttpSettings": {"path": "/helmsman", "mode": mode}, "security": "tls", "tlsSettings": {"alpn": ["h2", "http/1.1"], "certificates": [{"certificateFile": str(self.root / "cert"), "keyFile": str(self.root / "key")}]}}}], "outbounds": [{"protocol": "freedom", "settings": {"finalRules": [{"action": "allow", "ip": ["127.0.0.1/32"]}]}}]}
@@ -105,6 +117,10 @@ class XhttpTransportTests(unittest.TestCase):
                 stream['httpupgradeSettings'] = {'path': '/helmsman'}
                 o['transport'] = {'type': 'httpupgrade', 'path': '/helmsman'}
                 o['tls']['alpn'] = ['http/1.1']
+        if kind == 'http':
+            # Xray's HTTP inbound parses HTTP/1.1; do not advertise h2 in this fixture.
+            server['inbounds'][0]['streamSettings']['tlsSettings']['alpn'] = ['http/1.1']
+            o['tls']['alpn'] = ['http/1.1']
         if mux is not None:
             o['xray_mux'] = mux
         if reality:
@@ -124,6 +140,11 @@ class XhttpTransportTests(unittest.TestCase):
             stream["realitySettings"] = {"target": "127.0.0.1:" + str(target_port), "serverNames": ["localhost"], "privateKey": private, "shortIds": ["1234"]}
             o["tls"] = {"enabled": True, "server_name": "localhost", "utls": {"enabled": True, "fingerprint": "chrome"}, "reality": {"enabled": True, "public_key": public, "short_id": "1234"}}
         client = compile_xray(profile(o), (client_port, "test"))
+        if native:
+            raw = client['outbounds'][0]
+            raw['streamSettings'].pop('sockopt')
+            imported = parse(json.dumps({'outbounds': [raw, {'protocol': 'loopback', 'settings': {'inboundTag': 'internal'}}]}))[0]
+            client = compile_xray(imported, (client_port, 'test'))
         if mux is not None:
             self.assertEqual(client['outbounds'][0]['mux'], mux)
         client["log"] = {"loglevel": "debug"}
@@ -145,7 +166,7 @@ class XhttpTransportTests(unittest.TestCase):
                     with socks_connect(client_port, "helmsman", "test", "127.0.0.1", self.tcp.server_address[1]) as s:
                         s.sendall(b"xhttp-real-tcp")
                         self.assertEqual(receive(s, 14), b"xhttp-real-tcp")
-                    udp_echo(client_port, self.udp.server_address[1])
+                    if kind != 'http': udp_echo(client_port, self.udp.server_address[1])
                     if mux is not None:
                         streams = []
                         try:
@@ -210,3 +231,14 @@ class XhttpTransportTests(unittest.TestCase):
 
     def test_native_xudp_without_tcp_mux(self):
         self.exercise('auto', network='tcp', mux={'enabled': True, 'concurrency': -1, 'xudpConcurrency': 8, 'xudpProxyUDP443': 'allow'})
+
+    def test_native_json_shadowsocks_socks_http_actual_tls_connections(self):
+        for kind in ('shadowsocks', 'socks', 'http'):
+            with self.subTest(kind=kind):
+                self.exercise('auto', kind=kind, network='tcp', native=True)
+        self.exercise('auto', kind='shadowsocks', network='tcp', native=True, method='2022-blake3-aes-128-gcm')
+
+    def test_native_json_shadowsocks_socks_mux(self):
+        for kind in ('shadowsocks', 'socks', 'http'):
+            with self.subTest(kind=kind):
+                self.exercise('auto', kind=kind, network='tcp', native=True, mux={'enabled': True, 'concurrency': 8, 'xudpProxyUDP443': 'skip'})

@@ -13,7 +13,8 @@ import unittest
 from pathlib import Path
 
 from helmsman.common import defaults
-from helmsman.importers import profile
+from helmsman.importers import parse, profile
+from test_subscription_compat import xray_hysteria, xray_proxy
 from helmsman.routing import compile_config
 from helmsman.system import receive, socks_connect
 
@@ -61,7 +62,7 @@ class TransportTests(unittest.TestCase):
         cls.thread.join()
         cls.tmp.cleanup()
 
-    def exercise(self, kind, transport=None):
+    def exercise(self, kind, transport=None, native=False):
         server_port, socks_port = port(), port()
         binary = Path(ENGINE_DIR) / ("sing-box-awg" if kind in {"amneziawg", "warp-amneziawg"} else "sing-box")
         t = "wireguard" if kind in {"amneziawg", "warp-amneziawg"} else kind
@@ -79,6 +80,10 @@ class TransportTests(unittest.TestCase):
         if t == "shadowsocks":
             server.update(method="aes-128-gcm", password="test-password")
             out.update(method="aes-128-gcm", password="test-password")
+        if t in {'socks', 'http'}:
+            server['users'] = [{'username': 'fixture-user', 'password': 'fixture-password'}]
+            out.update(username='fixture-user', password='fixture-password')
+            if t == 'socks': out['version'] = '5'
         if t == "vmess":
             out["security"] = "auto"
         if t == "hysteria":
@@ -120,7 +125,16 @@ class TransportTests(unittest.TestCase):
             # use. Wake the server fixture too; otherwise it never binds UDP.
             server_config["inbounds"] = [{"type": "direct", "tag": "wake", "listen": "127.0.0.1", "listen_port": wake_port, "override_address": "10.211.0.2", "override_port": self.echo.server_address[1]}]
             server_config["route"]["rules"] = [{"inbound": ["wake"], "outbound": "server"}]
-        p = profile(out, "test")
+        if native:
+            raw = xray_hysteria() if t == 'hysteria2' else xray_proxy(t)
+            raw['settings'].update(address=out['server'], port=out['server_port'])
+            if t == 'shadowsocks': raw['settings']['password'] = out['password']
+            if t == 'hysteria2': raw['streamSettings']['hysteriaSettings']['auth'] = out['password']
+            p = parse(json.dumps({'outbounds': [raw]}))[0]
+            if t == 'hysteria2':
+                p['outbound']['tls']['certificate'] = [self.cert]  # Private fixture CA; TLS verification stays enabled.
+        else:
+            p = profile(out, "test")
         state = defaults()
         state["settings"]["lan"] = False
         client_config = compile_config(state, p, self.root, os.getuid(), tun=False)
@@ -180,6 +194,11 @@ class TransportTests(unittest.TestCase):
                     p.wait()
             for log in logs:
                 log.close()
+
+    def test_native_xray_json_shadowsocks_socks_http_and_hysteria2(self):
+        for kind in ('shadowsocks', 'socks', 'http', 'hysteria2'):
+            with self.subTest(kind=kind):
+                self.exercise(kind, native=True)
 
     def test_vless_tcp(self): self.exercise("vless")
     def test_vless_websocket(self): self.exercise("vless", {"type": "ws", "path": "/helmsman"})

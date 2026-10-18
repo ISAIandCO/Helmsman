@@ -51,7 +51,7 @@ fixture['selected'] = fixture['profiles'][0]['id']
 fixture['subscriptions'] = [validate_subscription({'name': 'Моя подписка', 'url': 'https://example.test/sub', 'hwid_mode': 'remnawave'})]
 fixture['subscriptions'][0]['last_update'] = time.time()
 w.loaded(fixture)
-status = {'state': 'running', 'message': 'Соединением управляет фоновый сервис.', 'guard': True, 'desired': True, 'selected': fixture['selected'], 'preset': fixture['preset'], 'profiles': [{'id': p['id'], 'protocol': p['outbound']['type']} for p in fixture['profiles']]}
+status = {'state': 'running', 'message': 'Маршрутизация включена; доступность сервера проверяется отдельно.', 'guard': True, 'desired': True, 'selected': fixture['selected'], 'preset': fixture['preset'], 'profiles': [{'id': p['id'], 'protocol': p['outbound']['type']} for p in fixture['profiles']]}
 w.show_status(status)
 w.connect_button.click()
 assert saved_requests[-1] == ('disconnect', {})
@@ -75,6 +75,13 @@ for i in (0, 5):
     scroll = w.tabs.widget(i)
     assert scroll.widget().width() <= scroll.viewport().width(), (i, scroll.widget().width(), scroll.viewport().width())
     w.grab().save(str(out / f'desktop-small-{i}.png'))
+for width, height in ((1280, 720), (1180, 688), (1060, 650), (960, 600)):
+    w.resize(width, height); w.nav_buttons[0].click()
+    for _ in range(3): app.processEvents()
+    scroll = w.tabs.widget(0)
+    assert scroll.verticalScrollBar().maximum() == 0, (width, height, scroll.verticalScrollBar().maximum())
+    w.grab().save(str(out / f'desktop-fit-{width}x{height}.png'))
+print('PASS dashboard fits KDE client areas down to 960x600 without vertical scrolling')
 w.resize(1280, 800)
 
 def modal(invoke, action):

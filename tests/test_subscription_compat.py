@@ -34,7 +34,78 @@ def xray_config(network='tcp'):
                 {'protocol': 'freedom', 'tag': 'direct'}]}
 
 
+def xray_proxy(kind, modern=True):
+    server = {'address': '127.0.0.1', 'port': 12345}
+    if kind == 'shadowsocks':
+        server.update(method='aes-128-gcm', password='fixture-password')
+    elif modern:
+        server.update(user='fixture-user', **{'pass': 'fixture-password'})
+    else:
+        server['users'] = [{'user': 'fixture-user', 'pass': 'fixture-password', 'level': 0}]
+    settings = server if modern else {'servers': [server]}
+    if kind == 'http': settings['headers'] = {'X-Fixture': 'header-value'}
+    return {'protocol': kind, 'tag': kind, 'settings': settings, 'streamSettings': None, 'mux': None}
+
+
+def xray_hysteria():
+    return {'protocol': 'hysteria', 'tag': 'Hysteria2', 'settings': {'version': 2, 'address': '127.0.0.1', 'port': 443},
+            'streamSettings': {'network': 'hysteria', 'security': 'tls', 'tlsSettings': {'serverName': 'localhost'}, 'hysteriaSettings': {'version': 2, 'auth': 'fixture-password'}}}
+
+
 class SubscriptionCompatibilityTests(unittest.TestCase):
+    def test_native_extra_protocols_and_loopback_in_mixed_subscription(self):
+        for modern in (True, False):
+            source = xray_config()
+            source['outbounds'] += [xray_proxy(t, modern) for t in ('shadowsocks', 'socks', 'http')]
+            source['outbounds'] += [xray_hysteria(), {'protocol': 'loopback', 'tag': 'internal', 'settings': {'inboundTag': 'internal-only'}}, {'protocol': 'dns'}, {'protocol': 'blackhole'}]
+            profiles = parse(json.dumps([source]))
+            self.assertEqual([p['outbound']['type'] for p in profiles], ['vless', 'shadowsocks', 'socks', 'http', 'hysteria2'])
+            self.assertEqual(profiles[1]['outbound']['password'], 'fixture-password')
+            self.assertEqual(profiles[2]['outbound']['username'], 'fixture-user')
+            self.assertEqual(profiles[2]['outbound']['version'], '5')
+            self.assertEqual(profiles[3]['outbound']['headers'], {'X-Fixture': 'header-value'})
+            self.assertEqual(profiles[4]['outbound']['password'], 'fixture-password')
+            self.assertNotIn('transport', profiles[4]['outbound'])
+        with self.assertRaisesRegex(UserError, 'нет поддерживаемых'):
+            parse(json.dumps({'outbounds': [{'protocol': 'loopback'}]}))
+
+    def test_native_failure_has_safe_location_and_preserves_entire_subscription(self):
+        state = defaults()
+        sub = validate_subscription({'url': 'https://private.example/token-secret', 'hwid': 'secret-hwid'})
+        state['subscriptions'] = [sub]
+        source = xray_config()
+        result = update(state, sub['id'], lambda _: None, lambda *_: json.dumps([source]).encode())
+        for protocol in ('shadowsocksr', 'private-token-must-not-be-logged'):
+            bad = {'protocol': protocol, 'tag': 'private-tag', 'settings': {'password': 'private-password', 'address': 'private-host'}}
+            before = copy.deepcopy(result)
+            with self.assertRaises(UserError) as error:
+                update(result, sub['id'], lambda _: None, lambda *_: json.dumps([source, {'outbounds': [bad]}]).encode())
+            message = str(error.exception)
+            self.assertIn('JSON[1].outbounds[0]', message)
+            if protocol == 'shadowsocksr': self.assertIn('shadowsocksr', message)
+            for secret in ('private-token-must-not-be-logged', 'private-tag', 'private-password', 'private-host', 'token-secret', 'secret-hwid'):
+                self.assertNotIn(secret, message)
+            self.assertEqual(before, result)
+        for value, path in (({'outbounds': {}}, 'JSON.outbounds'), ([17], 'JSON[0]'), ({'outbounds': [xray_proxy('socks'), {'protocol': 'socks'}]}, 'JSON.outbounds[1]')):
+            with self.subTest(value=value), self.assertRaisesRegex(UserError, path.replace('[', r'\[').replace(']', r'\]')):
+                parse(json.dumps(value))
+
+    @unittest.skipUnless(os.environ.get('HELMSMAN_ENGINES'), 'Real engine checks run in CI')
+    def test_native_extra_protocols_pass_actual_engines(self):
+        with tempfile.TemporaryDirectory() as root:
+            for raw in [xray_proxy(t, modern) for t in ('shadowsocks', 'socks', 'http') for modern in (True, False)] + [xray_hysteria()]:
+                p = parse(json.dumps({'outbounds': [raw]}))[0]
+                path = Path(root) / 'config.json'
+                path.write_text(json.dumps(compile_config(defaults(), p, root, os.getuid())))
+                checked = subprocess.run([str(Path(os.environ['HELMSMAN_ENGINES']) / 'sing-box'), 'check', '-c', str(path)], capture_output=True, text=True)
+                self.assertEqual(checked.returncode, 0, checked.stderr)
+            for raw in [xray_proxy(t) for t in ('shadowsocks', 'socks', 'http')]:
+                raw['mux'] = {'enabled': True, 'concurrency': 8}
+                p = parse(json.dumps(raw))[0]
+                path.write_text(json.dumps(compile_xray(p)))
+                checked = subprocess.run([str(Path(os.environ['HELMSMAN_ENGINES']) / 'xray'), 'run', '-test', '-config', str(path)], capture_output=True, text=True)
+                self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+
     def test_neko_parameters_only_listed_fields_and_manual_override(self):
         s = validate_subscription({'name': 'Test', 'url': 'https://example.test/sub', 'hwid_mode': 'remnawave', 'hwid_params': PARAMS})
         _, headers = request_data(s, 'global-is-not-used')
@@ -122,7 +193,7 @@ class SubscriptionCompatibilityTests(unittest.TestCase):
                     compiled = compile_config(defaults(), p, '/tmp', os.getuid())
                     self.assertEqual(next(o for o in compiled['outbounds'] if o['tag'] == 'proxy')['type'], 'socks')
                     self.assertNotIn('xray_mux', json.dumps(compiled))
-        for mux in (True, None, {'enabled': 'true'}, {'concurrency': True}, {'concurrency': 32768}, {'xudpConcurrency': -32769}, {'xudpProxyUDP443': 'anything'}, {'enabled': True, 'file': '/etc/shadow'}):
+        for mux in (True, {'enabled': 'true'}, {'concurrency': True}, {'concurrency': 32768}, {'xudpConcurrency': -32769}, {'xudpProxyUDP443': 'anything'}, {'enabled': True, 'file': '/etc/shadow'}):
             source = xray_config()
             source['outbounds'][0]['mux'] = mux
             with self.subTest(invalid=mux), self.assertRaises(UserError):

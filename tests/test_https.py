@@ -18,6 +18,7 @@ from helmsman.common import Store, UserError, defaults
 from helmsman.daemon import Controller
 from test_core import MemoryRuntime
 from helmsman.subscriptions import SafeRedirect, download, update, validate_subscription
+from test_subscription_compat import xray_config, xray_hysteria, xray_proxy
 
 LINK = "vless://00000000-0000-0000-0000-000000000001@127.0.0.1:12345#HTTPS-test"
 
@@ -30,11 +31,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header('x-hwid-max-devices-reached' if self.path == '/limit' else 'x-hwid-not-supported', 'true')
             self.end_headers()
             return
-        if self.path == '/neko':
+        if self.path in ('/neko', '/mixed-xray', '/mixed-xray-bad'):
             expected = {'x-hwid': '0123456789abcdef', 'x-device-os': 'Android', 'x-ver-os': '16', 'x-device-model': 'Test Device'}
             if any(self.headers.get(k) != v for k, v in expected.items()) or not self.headers.get('user-agent', '').startswith('v2rayNG/'):
                 self.send_response(403); self.end_headers(); return
-            payload = gzip.compress(base64.b64encode(LINK.encode()))
+            content = LINK.encode()
+            if self.path.startswith('/mixed-xray'):
+                source = xray_config()
+                source['outbounds'] += [xray_proxy(t) for t in ('shadowsocks', 'socks', 'http')] + [xray_hysteria(), {'protocol': 'loopback'}]
+                if self.path.endswith('-bad'):
+                    source['outbounds'].append({'protocol': 'shadowsocksr', 'tag': 'private-name', 'settings': {'password': 'private-password'}})
+                content = json.dumps([source]).encode()
+            payload = gzip.compress(base64.b64encode(content))
             self.send_response(200)
             self.send_header('Content-Encoding', 'gzip')
             self.end_headers()
@@ -144,6 +152,21 @@ class HTTPSSubscriptionTests(unittest.TestCase):
             self.assertEqual(c.data['profiles'], before)
             self.assertEqual(c.data['hwid'], '0123456789abcdef')
             self.assertIn('лимит устройств', c.data['subscriptions'][0]['error'])
+
+    def test_mixed_xray_json_over_verified_https_keeps_previous_profiles_on_failure(self):
+        state = defaults()
+        sub = validate_subscription({'url': self.url + '/mixed-xray', 'hwid_mode': 'remnawave', 'hwid_params': 'hwid=0123456789abcdef,os=Android,osVersion=16,model=Test Device'})
+        state['subscriptions'] = [sub]
+        fetch = lambda url, headers: download(url, headers, self.opener)
+        result = update(state, sub['id'], lambda _: None, fetch)
+        self.assertEqual([p['outbound']['type'] for p in result['profiles']], ['vless', 'shadowsocks', 'socks', 'http', 'hysteria2'])
+        result['subscriptions'][0]['url'] = self.url + '/mixed-xray-bad'
+        before = copy.deepcopy(result)
+        with self.assertRaisesRegex(UserError, r'JSON\[0\].outbounds\[7\].*shadowsocksr') as error:
+            update(result, sub['id'], lambda _: None, fetch)
+        self.assertNotIn('private-password', str(error.exception))
+        self.assertNotIn('private-name', str(error.exception))
+        self.assertEqual(before, result)
 
 
 if __name__ == "__main__":

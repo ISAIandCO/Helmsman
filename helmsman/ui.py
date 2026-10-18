@@ -66,8 +66,8 @@ def card(parent_layout=None, role='card'):
     frame = QFrame()
     frame.setObjectName(role)
     layout = QVBoxLayout(frame)
-    layout.setContentsMargins(24, 22, 24, 22)
-    layout.setSpacing(12)
+    layout.setContentsMargins(*((18, 10, 18, 10) if role == 'compactCard' else (24, 22, 24, 22)))
+    layout.setSpacing(8 if role == 'compactCard' else 12)
     if parent_layout is not None:
         parent_layout.addWidget(frame)
     return frame, layout
@@ -168,7 +168,8 @@ QWidget { color: #f0edf8; font-family: "Noto Sans", "DejaVu Sans"; font-size: 14
 QMainWindow, QWidget#shell { background: #14131b; }
 QWidget#sidebar { background: #1b1923; border-right: 1px solid #2b2836; }
 QWidget#transparent, QWidget#page, QStackedWidget, QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }
-QFrame#card, QFrame#detailsCard { background: #211f2a; border: none; border-radius: 24px; }
+QFrame#card, QFrame#detailsCard, QFrame#compactCard { background: #211f2a; border: none; border-radius: 24px; }
+QFrame#compactCard QPushButton { min-height: 34px; border-radius: 17px; }
 QFrame#heroCard { background: #292336; border-radius: 30px; }
 QFrame#dialog { background: #211f2a; }
 QDialog, QMessageBox { background: #211f2a; }
