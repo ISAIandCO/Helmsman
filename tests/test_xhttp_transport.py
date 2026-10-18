@@ -78,7 +78,7 @@ class XhttpTransportTests(unittest.TestCase):
             s.server_close()
         cls.tmp.cleanup()
 
-    def exercise(self, mode, kind="vless", download=False, reality=False, network="xhttp", mux=None, native=False, method='aes-128-gcm', sockopt=None, finalmask=None, h3=False, clash=False, tls_extra=None, share=False):
+    def exercise(self, mode, kind="vless", download=False, reality=False, network="xhttp", mux=None, native=False, method='aes-128-gcm', sockopt=None, finalmask=None, h3=False, clash=False, tls_extra=None, share=False, pin_sha256=None, expect_pin_failure=False):
         server_port, client_port = port(), port()
         binary = str(Path(ENGINES) / "xray")
         settings = {"clients": [{"id": UUID}], "decryption": "none"}
@@ -168,6 +168,9 @@ class XhttpTransportTests(unittest.TestCase):
                 if 'service_name' in transport: query['serviceName'] = transport['service_name']
             if reality:
                 query.update(fp='chrome', pbk=o['tls']['reality']['public_key'], sid='1234', spx='/')
+            if pin_sha256 is not None:
+                query['pinSHA256'] = pin_sha256
+                if kind == 'hysteria2': query.pop('alpn', None)  # Standard URI relies on the engine's h3 default.
             if tls_extra:
                 for source, target in [('pinnedPeerCertSha256', 'pcs'), ('verifyPeerCertByName', 'vcn')]:
                     if source in tls_extra: query[target] = tls_extra[source]
@@ -205,6 +208,21 @@ class XhttpTransportTests(unittest.TestCase):
                 log = open(self.root / (name + ".log"), "w+")
                 logs.append(log)
                 procs.append(subprocess.Popen([binary, "run", "-config", str(path)], stdout=log, stderr=log, env={**os.environ, "SSL_CERT_FILE": str(self.root / "cert")}))
+            if expect_pin_failure:
+                for _ in range(4):
+                    try:
+                        with socks_connect(client_port, 'helmsman', 'test', '127.0.0.1', self.tcp.server_address[1]) as sock:
+                            sock.settimeout(1)
+                            sock.sendall(b'xhttp-real-tcp')
+                            self.assertNotEqual(sock.recv(14), b'xhttp-real-tcp', 'Wrong certificate pin accepted application traffic')
+                    except (OSError, UserError):
+                        pass
+                    logs[1].flush(); logs[1].seek(0)
+                    if 'against pinnedPeerCertSha256' in logs[1].read():
+                        self.assertTrue(all(p.poll() is None for p in procs))
+                        return
+                    time.sleep(0.1)
+                self.fail('Expected explicit certificate-pin rejection in the native engine')
             error = None
             for _ in range(10):
                 if any(p.poll() is not None for p in procs):
@@ -249,6 +267,12 @@ class XhttpTransportTests(unittest.TestCase):
                     p.wait()
             for log in logs:
                 log.close()
+
+    def test_hysteria2_uri_pinsha256_positive_and_negative(self):
+        import hashlib, ssl
+        pin = hashlib.sha256(ssl.PEM_cert_to_DER_cert((self.root / 'cert').read_text())).hexdigest()
+        self.exercise('auto', kind='hysteria2', network='hysteria', share=True, finalmask={'quicParams': {'congestion': 'bbr', 'debug': False}}, pin_sha256=pin)
+        self.exercise('auto', kind='hysteria2', network='hysteria', share=True, finalmask={'quicParams': {'congestion': 'bbr', 'debug': False}}, pin_sha256='00' * 32, expect_pin_failure=True)
 
     def test_uri_finalmask_actual_tcp_udp_tls_reality_and_hysteria2(self):
         fragment = {'tcp': [{'type': 'fragment', 'settings': {'packets': 'tlshello', 'length': '40-80', 'delay': '0'}}]}

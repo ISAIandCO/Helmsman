@@ -34,6 +34,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_response(403); self.end_headers(); return
             query = urlencode({'security': 'tls', 'sni': 'example.com', 'fm': json.dumps(MASKS[0])})
             content = LINK.split('#')[0] + '?' + query
+            if self.path.endswith('-pin'):
+                content = LINK + '\n' + 'hysteria2://fixture-password@example.com:443?' + urlencode({'sni': 'example.com', 'pinSHA256': 'ab' * 32, 'fm': json.dumps({'quicParams': {'congestion': 'bbr', 'debug': False}})})
             if self.path.endswith('-bad'): content = LINK + '\n' + LINK.split('#')[0] + '?' + urlencode({'fm': 'private-token'})
             if self.path.endswith('-denied'): content = 'vless://00000000-0000-0000-0000-000000000000@0.0.0.0:1#App%20not%20supported'
             self.send_response(200); self.send_header('Content-Encoding', 'gzip'); self.end_headers()
@@ -134,6 +136,15 @@ class HTTPSSubscriptionTests(unittest.TestCase):
         cls.server.server_close()
         cls.thread.join()
         cls.tmp.cleanup()
+
+    def test_hysteria_certificate_pin_over_verified_https(self):
+        state = defaults()
+        sub = validate_subscription({'url': self.url + '/uri-finalmask-pin', 'hwid_mode': 'remnawave', 'hwid_params': 'hwid=0123456789abcdef,os=Android,osVersion=16,model=Test Device'})
+        state['subscriptions'] = [sub]
+        result = update(state, sub['id'], lambda _: None, lambda url, headers: download(url, headers, self.opener))
+        self.assertEqual([p['outbound']['type'] for p in result['profiles']], ['vless', 'hysteria2'])
+        self.assertEqual(result['profiles'][1]['outbound']['xray_tls']['pinnedPeerCertSha256'], 'ab' * 32)
+        self.assertEqual(result['profiles'][1]['outbound']['xray_finalmask'], {'quicParams': {'congestion': 'bbr', 'debug': False}})
 
     def test_uri_finalmask_refresh_and_denial_keep_saved_state(self):
         with tempfile.TemporaryDirectory() as root, patch('helmsman.subscriptions.urllib.request.build_opener', return_value=self.opener):

@@ -184,10 +184,11 @@ def uri(s):
         _uri_extensions(o, q)
         return profile(o, v.get("ps", ""))
     parameters = parse_qs(u.query, keep_blank_values=True)
-    if len(parameters.get('fm', [])) > 1:
-        raise UserError('URI.fm: параметр FinalMask указан несколько раз.')
+    for field in ('fm', 'pinSHA256'):
+        if len(parameters.get(field, [])) > 1:
+            raise UserError('URI.' + field + ': параметр указан несколько раз.')
     q = {k: v[-1] for k, v in parameters.items()}
-    known = {"security", "type", "sni", "peer", "alpn", "fp", "pbk", "sid", "spx", "flow", "encryption", "path", "host", "serviceName", "mode", "extra", "insecure", "allowInsecure", "obfs", "obfs-password", "upmbps", "downmbps", "auth", "protocol", "mport", "ports", "username", "password", "congestion_control", "udp_relay_mode", "headerType", "packetEncoding", "fm", "pcs", "vcn", "pqv"}
+    known = {"security", "type", "sni", "peer", "alpn", "fp", "pbk", "sid", "spx", "flow", "encryption", "path", "host", "serviceName", "mode", "extra", "insecure", "allowInsecure", "obfs", "obfs-password", "upmbps", "downmbps", "auth", "protocol", "mport", "ports", "username", "password", "congestion_control", "udp_relay_mode", "headerType", "packetEncoding", "fm", "pcs", "vcn", "pqv", "pinSHA256"}
     if set(q) - known:
         raise UserError("Параметры ссылки требуют отдельной поддержки: " + ", ".join(sorted(set(q) - known)))
     t = {"hy2": "hysteria2", "ss": "shadowsocks", "socks5": "socks", "https": "http"}.get(u.scheme, u.scheme)
@@ -259,6 +260,15 @@ def _uri_extensions(outbound, query):
             reality = outbound.get('tls', {}).get('reality', {})
             if reality.get('enabled') and query.get('spx'): reality['spider_x'] = query['spx']
     extras = {target: query[source] for source, target in (('pcs', 'pinnedPeerCertSha256'), ('vcn', 'verifyPeerCertByName')) if query.get(source)}
+    if query.get('pinSHA256'):
+        if outbound['type'] != 'hysteria2':
+            raise UserError('URI pinSHA256: параметр поддерживается для Hysteria2.')
+        pin = query['pinSHA256'].replace(':', '').strip()
+        if not re.fullmatch(r'[0-9a-fA-F]{64}', pin):
+            raise UserError('Hysteria2 pinSHA256: нужен SHA-256 сертификата, 64 HEX-символа с необязательными двоеточиями.')
+        if extras.get('pinnedPeerCertSha256') and extras['pinnedPeerCertSha256'].replace(':', '').lower() != pin.lower():
+            raise UserError('URI pinSHA256/pcs: конфликтующие отпечатки сертификата.')
+        extras['pinnedPeerCertSha256'] = pin.lower()
     if extras:
         tls = outbound.get('tls', {})
         if not tls.get('enabled') or tls.get('reality', {}).get('enabled'):

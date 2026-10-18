@@ -1,5 +1,8 @@
 """Real local engine-to-engine traffic. Does not assert third-party interoperability."""
 import base64
+import hashlib
+import ssl
+from urllib.parse import urlencode
 import json
 import os
 import re
@@ -18,6 +21,7 @@ from test_xhttp_transport import udp_echo, UDP
 from test_subscription_compat import xray_hysteria, xray_proxy
 from helmsman.routing import compile_config
 from helmsman.system import receive, socks_connect
+from helmsman.xray import compile_xray
 
 ENGINE_DIR = os.environ.get("HELMSMAN_ENGINES", "")
 UUID = "00000000-0000-0000-0000-000000000001"
@@ -68,7 +72,7 @@ class TransportTests(unittest.TestCase):
         cls.thread.join()
         cls.tmp.cleanup()
 
-    def exercise(self, kind, transport=None, native=False, clash=False):
+    def exercise(self, kind, transport=None, native=False, clash=False, pinned_xray=False):
         server_port, socks_port = port(), port()
         binary = Path(ENGINE_DIR) / ("sing-box-awg" if kind in {"amneziawg", "warp-amneziawg"} else "sing-box")
         t = "wireguard" if kind in {"amneziawg", "warp-amneziawg"} else kind
@@ -131,7 +135,11 @@ class TransportTests(unittest.TestCase):
             # use. Wake the server fixture too; otherwise it never binds UDP.
             server_config["inbounds"] = [{"type": "direct", "tag": "wake", "listen": "127.0.0.1", "listen_port": wake_port, "override_address": "10.211.0.2", "override_port": self.echo.server_address[1]}]
             server_config["route"]["rules"] = [{"inbound": ["wake"], "outbound": "server"}]
-        if clash:
+        xray_port = port() if pinned_xray else None
+        if pinned_xray:
+            pin = hashlib.sha256(ssl.PEM_cert_to_DER_cert(self.cert)).hexdigest()
+            p = parse('hysteria2://test-password@127.0.0.1:' + str(server_port) + '?' + urlencode({'sni': 'localhost', 'pinSHA256': pin, 'fm': json.dumps({'quicParams': {'congestion': 'bbr', 'debug': False}})}))[0]
+        elif clash:
             node = {'name': 'Clash fixture', 'type': t, 'server': '127.0.0.1', 'port': server_port}
             if t == 'vless': node.update(uuid=UUID)
             if transport:
@@ -153,7 +161,7 @@ class TransportTests(unittest.TestCase):
             p = profile(out, "test")
         state = defaults()
         state["settings"]["lan"] = False
-        client_config = compile_config(state, p, self.root, os.getuid(), tun=False)
+        client_config = compile_config(state, p, self.root, os.getuid(), tun=False, xray_proxy=(xray_port, 'test') if pinned_xray else None)
         client_config["log"] = {"level": "debug"}
         # This test has no TUN: binding UDP to the physical interface would
         # intentionally make the loopback-only server unreachable. The separate
@@ -162,13 +170,17 @@ class TransportTests(unittest.TestCase):
         client_config["inbounds"] = [{"type": "socks", "listen": "127.0.0.1", "listen_port": socks_port, "users": [{"username": "test", "password": "test"}]}]
         procs, logs = [], []
         try:
-            for name, config in (("server", server_config), ("client", client_config)):
+            configs = [('server', server_config)]
+            if pinned_xray: configs.append(('sidecar', compile_xray(p, (xray_port, 'test'))))
+            configs.append(('client', client_config))
+            for name, config in configs:
                 file = self.root / (name + ".json")
                 file.write_text(json.dumps(config))
                 log = open(self.root / (name + ".log"), "w+")
                 logs.append(log)
                 executable = Path(ENGINE_DIR) / "sing-box" if name == "server" and kind == "warp-amneziawg" else binary
-                procs.append(subprocess.Popen([str(executable), "run", "-c", str(file)], stdout=log, stderr=log))
+                if name == 'sidecar': executable = Path(ENGINE_DIR) / 'xray'
+                procs.append(subprocess.Popen([str(executable), "run", "-config" if name == 'sidecar' else "-c", str(file)], stdout=log, stderr=log))
             last = None
             deadline = time.monotonic() + 25
             for _ in range(250):
@@ -186,7 +198,7 @@ class TransportTests(unittest.TestCase):
                     with socks_connect(socks_port, "test", "test", target, self.echo.server_address[1]) as sock:
                         sock.sendall(b"helmsman-real-transport")
                         self.assertEqual(receive(sock, 23), b"helmsman-real-transport")
-                    if clash: udp_echo(socks_port, self.udp.server_address[1], username="test")
+                    if clash or pinned_xray: udp_echo(socks_port, self.udp.server_address[1], username="test")
                     return
                 except (OSError, Exception) as e:
                     last = e
@@ -211,6 +223,9 @@ class TransportTests(unittest.TestCase):
                     p.wait()
             for log in logs:
                 log.close()
+
+    def test_pinned_hysteria2_xray_client_with_sing_box_server(self):
+        self.exercise('hysteria2', pinned_xray=True)
 
     def test_clash_vless_ws_and_hysteria2_salamander(self):
         self.exercise('vless', clash=True)
