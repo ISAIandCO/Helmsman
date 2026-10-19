@@ -23,4 +23,4 @@ helmsmanctl = "helmsman.rpc:main"
 include = ["helmsman*"]
 
 [tool.setuptools.package-data]
-helmsman = ["warp-obfuscation.json"]
+helmsman = ["warp-obfuscation.json", "locales/*.json"]

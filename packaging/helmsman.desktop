@@ -1,7 +1,8 @@
 [Desktop Entry]
 Type=Application
 Name=Helmsman
-Comment=VPN и виртуальные сети для Steam Deck
+Comment=VPN and virtual networks for Steam Deck
+Comment[ru]=VPN и виртуальные сети для Steam Deck
 Exec=/opt/helmsman/current/Helmsman
 Icon=network-vpn
 Categories=Network;

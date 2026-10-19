@@ -61,6 +61,7 @@ jobs:
           npm ci --ignore-scripts --no-audit --no-fund
           npm run check
           npm run build
+          node ../scripts/check-decky.mjs
       - name: Imports, HWID, RPC, persistence and actual local transports
         env:
           HELMSMAN_ENGINES: ${{ github.workspace }}/build/engines

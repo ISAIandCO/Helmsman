@@ -12,7 +12,7 @@ import time
 from collections import deque
 from pathlib import Path
 
-from .common import MAX_BYTES, PRESETS, RU_BASE, SOCKET, Store, UserError, VERSION, atomic_json, identifier, label
+from .common import MAX_BYTES, PRESETS, SOCKET, Store, UserError, VERSION, atomic_json, identifier, label
 from .dns import bootstrap_address, resolver_url
 from .importers import parse
 from .routing import compile_config, rule, source_list, text_list
@@ -22,12 +22,8 @@ from .warp import generate as generate_warp
 from .xray import is_xhttp
 from .subscriptions import fingerprint
 
-RU_LISTS = {
-    "ru-blocked": ("Россия: домены из общественных списков", "rule-set-geosite/geosite-ru-blocked.srs"),
-    "ru-ip-blocked": ("Россия: IP из общественных списков", "rule-set-geoip/geoip-ru-blocked.srs"),
-    "ru-domains": ("Российские домены", "rule-set-geosite/geosite-category-ru.srs"),
-    "ru-ips": ("Российские IP", "rule-set-geoip/geoip-ru.srs"),
-}
+from .regions import BUILTIN_LISTS, COUNTRIES, available_presets, required_lists, preset_description
+from .i18n import localize_response, translate_message
 
 
 def wake_clock():
@@ -45,9 +41,9 @@ class Controller:
         self.last_tick = wake_clock()
         self.net = ""
         self.last_network_check = 0
-        for key, (name, url) in RU_LISTS.items():
+        for key, (name, url) in BUILTIN_LISTS.items():
             if not any(x["id"] == key for x in self.store.data["lists"]):
-                self.store.data["lists"].append({"id": key, "name": name, "url": RU_BASE + url, "format": "srs", "interval_hours": 24})
+                self.store.data["lists"].append({"id": key, "name": name, "url": url, "format": "srs", "interval_hours": 24})
         self.store.save()
 
     @property
@@ -61,7 +57,11 @@ class Controller:
         s = self.runtime.status()
         if self.last_error:
             s["error"] = self.last_error
-        return {**s, "version": VERSION, "selected": self.data["selected"], "desired": self.data["desired"], "auto_connect": self.data['settings']['auto_connect'], "preset": self.data["preset"], "presets": PRESETS,
+        return {**s, "version": VERSION, "selected": self.data["selected"], "desired": self.data["desired"], "auto_connect": self.data['settings']['auto_connect'], "preset": self.data["preset"], "language": self.data['settings']['language'], "country": self.data['settings']['country'],
+                "presets": available_presets(self.data['settings']['country']),
+                "preset_descriptions": {key: preset_description(key) for key in available_presets(self.data['settings']['country'])},
+                "active_preset_name": PRESETS[self.data['preset']], "active_preset_description": preset_description(self.data['preset']),
+                "countries": COUNTRIES,
                 "profiles": [{"id": p["id"], "name": p["name"], "protocol": "zerotier" if p["kind"] == "zerotier" else "amneziawg" if p["outbound"].get("amnezia_wg") else p["outbound"]["type"] + ("/xhttp" if is_xhttp(p) else "") + ("/mux" if 'xray_mux' in p['outbound'] else '')} for p in self.data["profiles"]],
                 "subscriptions": [{k: s[k] for k in ("id", "name", "last_update", "error") if k in s} for s in self.data["subscriptions"]]}
 
@@ -112,10 +112,10 @@ class Controller:
             raise UserError("Некорректный список. Прежняя версия сохранена.") from None
 
     def apply_preset(self, preset):
-        if preset not in PRESETS:
+        if preset not in available_presets(self.data['settings']['country']):
             raise UserError("Неизвестный сценарий.")
         candidate = copy.deepcopy(self.data)
-        needed = {"ru-selective": ["ru-blocked", "ru-ip-blocked"], "ru-except": ["ru-domains", "ru-ips"]}.get(preset, [])
+        needed = required_lists(preset)
         for tag in needed:
             i = next(i for i, x in enumerate(candidate["lists"]) if x["id"] == tag)
             if not candidate["lists"][i].get("path"):
@@ -263,11 +263,21 @@ class Controller:
                 candidate = copy.deepcopy(self.data)
                 candidate["rules"] = [rule(r) for r in params["rules"]]
                 self.commit(candidate, restart=True)
+            elif method == "preferences":
+                if not params or set(params) - {'language', 'country'}:
+                    raise UserError('Неизвестная настройка языка или страны.')
+                if ('language' in params and params['language'] not in {'ru', 'en'}) or ('country' in params and params['country'] not in COUNTRIES):
+                    raise UserError('Неподдерживаемый язык или страна.')
+                candidate = copy.deepcopy(self.data)
+                candidate['settings'].update(params)
+                self.commit(candidate)  # No restart, downloads or change to the applied preset.
             elif method == "settings_save":
                 candidate = copy.deepcopy(self.data)
                 s = params["settings"]
                 if set(s) - candidate["settings"].keys():
                     raise UserError("Неизвестный параметр сервиса.")
+                if set(s) & {'language', 'country'}:
+                    raise UserError('Используйте отдельный выбор языка и страны.')
                 candidate["settings"].update(s)
                 c = candidate["settings"]
                 if any(type(c[k]) is not bool for k in ("auto_connect", "kill_switch", "lan", "ipv6")):
@@ -283,7 +293,7 @@ class Controller:
             elif method == "list_save":
                 candidate = copy.deepcopy(self.data)
                 existing = next((x for x in candidate["lists"] if x["id"] == params.get("id")), None)
-                if existing and existing["id"] in RU_LISTS:
+                if existing and existing["id"] in BUILTIN_LISTS:
                     raise UserError("Для изменения встроенного списка создайте пользовательскую копию.")
                 item = {"id": existing["id"] if existing else identifier(), "name": label(params["name"]), "url": https_url(params["url"]) if params.get("url") else "", "format": params.get("format", "text"), "interval_hours": 24}
                 if item["format"] not in {"text", "source", "srs"}:
@@ -313,7 +323,7 @@ class Controller:
                 if errors:
                     raise UserError(errors[0])
             elif method == "list_delete":
-                if params["id"] in RU_LISTS:
+                if params["id"] in BUILTIN_LISTS:
                     raise UserError("Встроенный список удалять нельзя.")
                 if any(params["id"] in r["values"] for r in self.data["rules"] if r["type"] == "list"):
                     raise UserError("Сначала удалите правила, использующие список.")
@@ -381,7 +391,8 @@ class Handler(socketserver.StreamRequestHandler):
             if not isinstance(req, dict) or not isinstance(req.get("params", {}), dict):
                 raise UserError("Некорректный запрос.")
             value = self.server.controller.call(req["method"], req.get("params", {}))
-            result = {"ok": True, "result": value}
+            language = self.server.controller.data['settings']['language']
+            result = {"ok": True, "result": localize_response(value, language, req['method'])}
         except UserError as e:
             result = {"ok": False, "error": str(e)}
         except (ValueError, KeyError, TypeError, AttributeError, OverflowError):
@@ -389,6 +400,8 @@ class Handler(socketserver.StreamRequestHandler):
         except Exception:
             # Never serialize traceback/URLs/config contents to logs or clients.
             result = {"ok": False, "error": "Внутренняя ошибка сервиса. Проверьте установку и права доступа."}
+        if not result['ok']:
+            result['error'] = translate_message(result['error'], self.server.controller.data['settings']['language'])
         try:
             self.wfile.write(json.dumps(result, ensure_ascii=False).encode() + b"\n")
         except OSError:

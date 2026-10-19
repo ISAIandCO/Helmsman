@@ -9,6 +9,8 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QCheckBox, QDialogButtonBox, QToolButton
 from helmsman.common import defaults
 from helmsman.gui import Window, theme
+from helmsman.i18n import language, localize_response
+from helmsman.regions import COUNTRIES, available_presets
 from helmsman.importers import parse
 from helmsman.subscriptions import validate_subscription
 
@@ -132,4 +134,50 @@ assert saved_requests[0][1]['user_agent'] == 'v2rayNG/1.10.5'
 assert w.tabs.count() == 7
 w.nav_buttons[0].click(); app.processEvents()
 print('PASS seven GUI pages at 1280x800 and 960x600, navigation, connection actions, DNS and subscription settings')
+# Preferences update only their own values; selecting a route is a preview.
+for lang in ('ru', 'en'):
+    for country in COUNTRIES:
+        config = copy.deepcopy(fixture)
+        config['settings'].update(language=lang, country=country)
+        w.loaded(config)
+        w.show_status(localize_response({**status, 'language': lang, 'country': country}, lang, 'status'))
+        assert language() == lang
+        assert w.language_picker.currentData() == lang and w.country_picker.currentData() == country
+        assert {w.preset_picker.itemData(i) for i in range(w.preset_picker.count())} == set(available_presets(country))
+        assert w.profile_picker.itemData(0) == fixture['profiles'][0]['id']
+        assert fixture['profiles'][0]['name'] in w.profile_picker.itemText(0)
+    for width, height in ((1280, 720), (960, 600)):
+        w.resize(width, height)
+        for i in range(w.tabs.count()):
+            w.tabs.setCurrentIndex(i)
+            for _ in range(3): app.processEvents()
+            scroll = w.tabs.widget(i)
+            assert scroll.widget().width() <= scroll.viewport().width(), (lang, i, width)
+            w.grab().save(str(out / f'desktop-{lang}-{width}-{i}.png'))
+    if lang == 'en':
+        assert w.nav_buttons[5].text() == 'Settings'
+        assert not any('фильтр' in w.setting_widgets['dns_direct'].picker.itemText(i) for i in range(8))
+        def english_warp(dialog):
+            assert dialog.findChild(QDialogButtonBox).button(QDialogButtonBox.Cancel).text() == 'Cancel'
+            assert dialog.fields['mode'][1].itemText(0) == 'AmneziaWG (obfuscated)'
+            dialog.grab().save(str(out / 'desktop-en-warp.png')); dialog.reject()
+        modal(w.generate_warp, english_warp)
+config = copy.deepcopy(fixture)
+config['settings'].update(language='en', country='cn'); config['preset'] = 'ru-selective'
+w.loaded(config)
+assert w.preset_picker.currentIndex() == -1 and not w.apply_preset_button.isEnabled()
+assert 'Russia: selective' in w.active_route.text()
+saved_requests.clear()
+w.preset_picker.setCurrentIndex(w.preset_picker.findData('cn-except'))
+assert not saved_requests and w.config['preset'] == 'ru-selective'
+w.apply_preset_button.click()
+assert saved_requests[-1] == ('preset', {'preset': 'cn-except'})
+w.country_picker.setCurrentIndex(w.country_picker.findData('ir'))
+w.country_picker.activated.emit(w.country_picker.currentIndex())
+assert saved_requests[-1] == ('preferences', {'country': 'ir'})
+w.language_picker.setCurrentIndex(w.language_picker.findData('ru'))
+w.language_picker.activated.emit(w.language_picker.currentIndex())
+assert saved_requests[-1] == ('preferences', {'language': 'ru'})
+w.loaded(config)
+print('PASS RU/EN pages, all country choices, preserved profile names, independent preferences and explicit preset apply')
 w.close()

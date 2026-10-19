@@ -5,11 +5,11 @@ import tempfile
 import uuid
 from pathlib import Path
 
+from .regions import PRESETS, RU_BASE, COUNTRIES
+
 VERSION = "1.0.0"
 MAX_BYTES = 8 * 1024 * 1024
 SOCKET = "/run/helmsman/control.sock"
-PRESETS = {"full": "Весь интернет через VPN", "ru-selective": "Россия: выборочно", "ru-except": "Россия напрямую", "manual": "Мои правила"}
-RU_BASE = "https://raw.githubusercontent.com/runetfreedom/russia-v2ray-rules-dat/release/sing-box/"
 
 
 class UserError(Exception):
@@ -59,7 +59,7 @@ def boot_intent(state, current_boot):
 def defaults():
     return {"schema": 1, "hwid": identifier(), "profiles": [], "subscriptions": [],
             "selected": "", "desired": False, "preset": "full", "rules": [], "lists": [],
-            "settings": {"auto_connect": False, "kill_switch": True, "lan": True, "ipv6": True, "mtu": 1400,
+            "settings": {"language": "ru", "country": "ru", "auto_connect": False, "kill_switch": True, "lan": True, "ipv6": True, "mtu": 1400,
                          "default_action": "proxy", "dns_proxy": "https://cloudflare-dns.com/dns-query", "dns_direct": "https://dns.quad9.net/dns-query",
                          "dns_bootstrap": "9.9.9.9",
                          "reconnect_seconds": 15, "list_update_hours": 24}}
@@ -81,6 +81,8 @@ class Store:
                 # Add settings without replacing existing endpoints or HWID.
                 for key, value in defaults()["settings"].items():
                     self.data["settings"].setdefault(key, value)
+                if self.data['settings']['language'] not in ('ru', 'en') or self.data['settings']['country'] not in COUNTRIES:
+                    raise ValueError('preferences')
             except (ValueError, KeyError, TypeError):
                 raise UserError("Файл настроек повреждён или создан другой версией. Сохраните его и восстановите резервную копию.") from None
         else:

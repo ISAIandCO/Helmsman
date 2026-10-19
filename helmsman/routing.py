@@ -5,11 +5,12 @@ import re
 from pathlib import Path
 
 from .common import PRESETS, UserError, identifier, label
+from .regions import BUILTIN_LISTS, preset_rules
 from .dns import bootstrap_address, dns_server
 from .xray import uses_xray, socks_outbound
 
 RULE_TYPES = {"domain", "domain_suffix", "ip_cidr", "list", "process_name", "process_path", "port"}
-LIST_FIELDS = {"domain", "domain_suffix", "ip_cidr"}
+LIST_FIELDS = {"domain", "domain_suffix", "domain_regex", "ip_cidr"}
 
 
 def rule(raw):
@@ -43,7 +44,7 @@ def rule(raw):
             except ValueError:
                 raise UserError("Порт: 1–65535.") from None
         elif kind == "list":
-            if not re.fullmatch(r"[a-f0-9]{32}|ru-(blocked|ip-blocked|domains|ips)", v):
+            if v not in BUILTIN_LISTS and not re.fullmatch(r"[a-f0-9]{32}", v):
                 raise UserError("Выберите существующий список.")
         elif not v or len(v) > 4096 or "\n" in v or "\x00" in v:
             raise UserError("Некорректное имя процесса или путь.")
@@ -56,11 +57,19 @@ def source_list(obj):
         raise UserError("Список: нужен sing-box source JSON version/rules.")
     for r in obj["rules"]:
         if not isinstance(r, dict) or not r or set(r) - LIST_FIELDS:
-            raise UserError("Списки могут содержать только domain, domain_suffix и ip_cidr.")
+            raise UserError("Списки могут содержать только domain, domain_suffix, domain_regex и ip_cidr.")
         for k, values in r.items():
             values = values if isinstance(values, list) else [values]
             if not values or len(values) > 1000000:
                 raise UserError("Пустой или слишком большой список.")
+            if k == 'domain_regex':
+                # sing-box uses RE2 (bounded execution), not Python's regex
+                # engine. Keep expressions intact; the native check validates
+                # syntax. SagerNet's CN set includes regional CDN expressions.
+                if any(not isinstance(v, str) or not v or len(v) > 4096 or any(ord(c) < 32 for c in v) for v in values):
+                    raise UserError('Некорректное регулярное выражение домена.')
+                r[k] = values
+                continue
             normalized = []
             for start in range(0, len(values), 10000):
                 normalized.extend(rule({"type": k, "values": values[start:start + 10000]})["values"])
@@ -130,11 +139,9 @@ def compile_config(state, profile, runtime, engine_uid, tun=True, xray_proxy=Non
         settings["dns"]["rules"].append({"domain_suffix": ["local", "lan", "home.arpa"], "server": "bootstrap"})
     rules = [rule(x) for x in state["rules"] if x.get("enabled", True)]
     preset = state["preset"]
-    if preset == "ru-selective":
-        rules += [rule({"type": "list", "values": ["ru-blocked", "ru-ip-blocked"], "action": "proxy"})]
-    elif preset == "ru-except":
-        rules += [rule({"type": "list", "values": ["ru-domains", "ru-ips"], "action": "direct"})]
-    requested_final = "direct" if preset == "ru-selective" else s["default_action"] if preset == "manual" else "proxy"
+    regional, final = preset_rules(preset)
+    rules += [rule(item) for item in regional]
+    requested_final = s["default_action"] if preset == "manual" else final
     resolver = "dns-direct" if requested_final == "direct" else "dns-proxy"
     used = set()
     lists = {x["id"]: x for x in state["lists"]}
@@ -156,7 +163,7 @@ def compile_config(state, profile, runtime, engine_uid, tun=True, xray_proxy=Non
                 # 1.14 rejects legacy destination-IP filters in DNS rule sets.
                 # DNS decisions use only the domain projection; real-IP rules
                 # are evaluated by routing after the explicit resolve action.
-                domains = {"domain": [], "domain_suffix": []}
+                domains = {"domain": [], "domain_suffix": [], "domain_regex": []}
                 for tag in item["values"]:
                     if tag not in lists or not lists[tag].get("path") or not Path(lists[tag]["path"]).is_file():
                         raise UserError("Сначала загрузите список: " + tag)
