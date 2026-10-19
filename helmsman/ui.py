@@ -34,6 +34,9 @@ def icon(name, color='#c8c3db', size=24):
         'network': [[(12,5),(12,12)],[(5,18),(5,12),(19,12),(19,18)]],
         'warp': [[(8,4),(5,12),(11,12),(9,21),(20,9),(14,9),(16,4),(8,4)]],
     }
+    if name == 'info':
+        painter.drawEllipse(QRectF(3, 3, 18, 18))
+        lines[name] = [[(12, 7), (12, 7.1)], [(12, 11), (12, 17)]]
     if name == 'compass':
         painter.drawEllipse(QRectF(3,3,18,18))
         lines[name] = [[(16,7),(13,14),(7,17),(10,10),(16,7)]]

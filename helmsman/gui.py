@@ -7,9 +7,11 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from PySide6.QtCore import QThread, QTimer, Signal, Qt, QSize
-from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QFrame, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QStackedWidget, QScroller, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QFrame, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox, QStackedWidget, QScroller, QToolButton, QVBoxLayout, QWidget)
 
-from .common import MAX_BYTES, PRESETS, UserError, VERSION
+from .i18n import tr, set_language, language, translate_message
+from .regions import COUNTRIES, PRESETS, BUILTIN_LISTS, available_presets, preset_description
+from .common import MAX_BYTES, UserError, VERSION
 from .dns import DNS_PRESETS, resolver_url
 from .rpc import call
 from .subscriptions import SUBSCRIPTION_AGENT, subscription_agent
@@ -47,7 +49,7 @@ def button(text, callback, layout, variant='', symbol=''):
 def combo(items):
     c = QComboBox()
     for key, text in items.items():
-        c.addItem(text, key)
+        c.addItem(tr(text), key)
     return c
 
 
@@ -72,7 +74,7 @@ class Form(QDialog):
         body.addLayout(form)
         extra = None
         if advanced:
-            pane = disclosure('Дополнительные настройки', body)
+            pane = disclosure(tr('Дополнительные настройки'), body)
             extra = QVBoxLayout(); extra.setSpacing(16); pane.addLayout(extra)
         for key, (name, widget) in fields.items():
             widget.setAccessibleName(name)
@@ -88,11 +90,11 @@ class Form(QDialog):
         scroll.setWidget(page)
         layout.addWidget(scroll)
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Save).setText('Сохранить')
+        buttons.button(QDialogButtonBox.Save).setText(tr('Сохранить'))
         buttons.button(QDialogButtonBox.Save).setProperty('variant', 'primary')
         buttons.button(QDialogButtonBox.Save).style().unpolish(buttons.button(QDialogButtonBox.Save))
         buttons.button(QDialogButtonBox.Save).style().polish(buttons.button(QDialogButtonBox.Save))
-        buttons.button(QDialogButtonBox.Cancel).setText('Отмена')
+        buttons.button(QDialogButtonBox.Cancel).setText(tr('Отмена'))
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -130,11 +132,11 @@ class DNSSelector(QWidget):
         self.picker = combo({url: name for name, url in DNS_PRESETS})
         self.picker.setMinimumContentsLength(10)
         self.picker.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.picker.addItem("Свой сервер…", "")
+        self.picker.addItem(tr("Свой сервер…"), "")
         self.address = line()
-        self.address.setPlaceholderText("https://сервер/dns-query или tls://сервер:853")
-        self.address.setAccessibleName("Адрес DNS DoH или DoT")
-        self.picker.setAccessibleName("Готовый DNS или свой сервер")
+        self.address.setPlaceholderText(tr("https://сервер/dns-query или tls://сервер:853"))
+        self.address.setAccessibleName(tr("Адрес DNS DoH или DoT"))
+        self.picker.setAccessibleName(tr("Готовый DNS или свой сервер"))
         layout.addWidget(self.picker)
         layout.addWidget(self.address)
         self.picker.activated.connect(self.choose)
@@ -173,6 +175,17 @@ class Window(QMainWindow):
         self.workers = set()
         self.busy = False
         self.connection_desired = False
+        self.build_ui()
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.poll)
+        self.timer.start(3000)
+        self.refresh()
+
+    def build_ui(self):
+        old = self.takeCentralWidget()
+        if old:
+            old.deleteLater()
+            self.nav_group.deleteLater()
         shell = QWidget(); shell.setObjectName('shell')
         root = QHBoxLayout(shell); root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
         sidebar = QWidget(); sidebar.setObjectName('sidebar'); sidebar.setFixedWidth(204)
@@ -196,7 +209,7 @@ class Window(QMainWindow):
         self.page_caption = label('', 'caption')
         titles.addWidget(self.page_title); titles.addWidget(self.page_caption)
         heading.addLayout(titles, 1)
-        self.service_badge = label('Ожидание сервиса', 'badge')
+        self.service_badge = label(tr('Ожидание сервиса'), 'badge')
         self.service_badge.setAlignment(Qt.AlignCenter)
         heading.addWidget(self.service_badge, 0, Qt.AlignTop)
         workspace.addLayout(heading)
@@ -213,20 +226,16 @@ class Window(QMainWindow):
         self.build_lists()
         self.build_settings()
         self.build_diagnostics()
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.poll)
-        self.timer.start(3000)
-        self.refresh()
 
     def page(self, name):
         descriptions = {
-            'Подключение': ('Ваше соединение', 'Выберите подключение и маршрут для интернета.'),
-            'Профили': ('Подключения', 'Ваши серверы и виртуальные сети.'),
-            'Подписки': ('Подписки', 'Управляйте списками серверов и обновлениями.'),
-            'Правила': ('Маршрутизация', 'Решайте, какой трафик идёт через подключение.'),
-            'Списки': ('Списки адресов', 'Домены и IP для ваших правил.'),
-            'Настройки': ('Настройки', 'Защита соединения, DNS и поведение сервиса.'),
-            'Диагностика': ('Диагностика', 'Состояние сервиса и последние события.'),
+            tr('Подключение'): (tr('Ваше соединение'), tr('Выберите подключение и маршрут для интернета.')),
+            tr('Профили'): (tr('Подключения'), tr('Ваши серверы и виртуальные сети.')),
+            tr('Подписки'): (tr('Подписки'), tr('Управляйте списками серверов и обновлениями.')),
+            tr('Правила'): (tr('Маршрутизация'), tr('Решайте, какой трафик идёт через подключение.')),
+            tr('Списки'): (tr('Списки адресов'), tr('Домены и IP для ваших правил.')),
+            tr('Настройки'): (tr('Настройки'), tr('Защита соединения, DNS и поведение сервиса.')),
+            tr('Диагностика'): (tr('Диагностика'), tr('Состояние сервиса и последние события.')),
         }
         symbols = ['home', 'profiles', 'subscriptions', 'rules', 'lists', 'settings', 'diagnostics']
         index = len(self.nav_buttons)
@@ -270,23 +279,24 @@ class Window(QMainWindow):
         self.workers.add(worker)
         if not quiet:
             self.busy = True
-            self.statusBar().showMessage("Выполняется…")
+            self.statusBar().showMessage(tr("Выполняется…"))
         def success(result):
             if not quiet:
                 self.busy = False
-                self.statusBar().showMessage("Готово", 3000)
+                self.statusBar().showMessage(tr("Готово"), 3000)
             if callback:
                 callback(result)
         def failure(message):
+            message = translate_message(message, language())
             if not quiet:
                 self.busy = False
-                QMessageBox.warning(self, "Helmsman", message)
-            self.statusBar().showMessage(message, 10000)
+                QMessageBox.warning(self, "Helmsman", translate_message(message, language()))
+            self.statusBar().showMessage(translate_message(message, language()), 10000)
             if method in {'status', 'configuration'}:
-                self.service_badge.setText('Сервис недоступен')
-                self.state_title.setText('Нет связи с сервисом')
+                self.service_badge.setText(tr('Сервис недоступен'))
+                self.state_title.setText(tr('Нет связи с сервисом'))
                 self.state_label.setText(message)
-                self.guard_badge.setText('Состояние неизвестно')
+                self.guard_badge.setText(tr('Состояние неизвестно'))
                 self.guard_badge.setProperty('active', False)
                 self.guard_badge.style().unpolish(self.guard_badge); self.guard_badge.style().polish(self.guard_badge)
                 self.connect_button.setEnabled(False)
@@ -309,7 +319,7 @@ class Window(QMainWindow):
             self.request("status", callback=self.show_status, quiet=True)
 
     def build_connection(self):
-        l = self.page('Подключение')
+        l = self.page(tr('Подключение'))
         l.setSpacing(12)
         row = QHBoxLayout(); row.setSpacing(18)
         hero, body = card(role='heroCard')
@@ -317,50 +327,73 @@ class Window(QMainWindow):
         top = QHBoxLayout()
         mark = QLabel(); mark.setPixmap(icon('power', COLORS['primary'], 28).pixmap(28,28)); mark.setFixedSize(28,28)
         top.addWidget(mark)
-        top.addWidget(label('ПОДКЛЮЧЕНИЕ', 'eyebrow')); top.addStretch()
-        self.guard_badge = label('Защита выключена', 'badge'); top.addWidget(self.guard_badge)
+        top.addWidget(label(tr('ПОДКЛЮЧЕНИЕ'), 'eyebrow')); top.addStretch()
+        self.guard_badge = label(tr('Защита выключена'), 'badge'); top.addWidget(self.guard_badge)
         body.addLayout(top)
-        self.state_title = label('Добро пожаловать', 'stateTitle'); body.addWidget(self.state_title)
-        self.state_label = label('Ожидание сервиса…', 'body'); self.state_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.state_title = label(tr('Добро пожаловать'), 'stateTitle'); body.addWidget(self.state_title)
+        self.state_label = label(tr('Ожидание сервиса…'), 'body'); self.state_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         body.addWidget(self.state_label)
         body.addSpacing(12)
-        body.addWidget(label('Выбранное подключение', 'caption'))
-        self.profile_picker = QComboBox(); self.profile_picker.setAccessibleName('Выбранное подключение')
+        body.addWidget(label(tr('Выбранное подключение'), 'caption'))
+        self.profile_picker = QComboBox(); self.profile_picker.setAccessibleName(tr('Выбранное подключение'))
         self.profile_picker.setMinimumContentsLength(16); self.profile_picker.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.profile_picker.activated.connect(lambda _: self.mutate('select', {'profile_id': self.profile_picker.currentData()}))
         body.addWidget(self.profile_picker)
-        self.connect_button = button('Подключить', self.toggle_connection, body, 'connect', 'power')
+        self.connect_button = button(tr('Подключить'), self.toggle_connection, body, 'connect', 'power')
         self.connect_button.setEnabled(False)
-        button('Проверить подключение', lambda: self.request('probe', callback=lambda r: QMessageBox.information(self, 'Проверка', r['message'])), body, 'text', 'diagnostics')
+        button(tr('Проверить подключение'), lambda: self.request('probe', callback=lambda r: QMessageBox.information(self, tr('Проверка'), r['message'])), body, 'text', 'diagnostics')
         body.addStretch()
         row.addWidget(hero, 3)
         right = QVBoxLayout(); right.setSpacing(12)
         _, route = card(right, 'compactCard')
-        route.addWidget(label('Маршрут трафика', 'cardTitle'))
-        self.preset_picker = combo(PRESETS)
+        route.addWidget(label(tr('Маршрут трафика'), 'cardTitle'))
+        self.preset_picker = combo(available_presets('ru'))
         self.preset_picker.setMinimumContentsLength(13); self.preset_picker.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-        self.preset_picker.activated.connect(lambda _: self.mutate('preset', {'preset': self.preset_picker.currentData()}))
+        self.preset_picker.currentIndexChanged.connect(self.preview_preset)
         route.addWidget(self.preset_picker)
+        route_actions = QHBoxLayout()
+        self.apply_preset_button = button(tr('Применить маршрут'), lambda: self.mutate('preset', {'preset': self.preset_picker.currentData()}), route_actions)
+        self.preset_info_button = QToolButton()
+        self.preset_info_button.setIcon(icon('info'))
+        self.preset_info_button.setAccessibleName(tr('Описание маршрута'))
+        self.preset_info_button.setMinimumSize(36, 34)
+        self.preset_info_button.clicked.connect(self.describe_preset)
+        route_actions.addWidget(self.preset_info_button)
+        route.addLayout(route_actions)
+        self.active_route = label('', 'caption'); route.addWidget(self.active_route)
         self.lan_summary = label('', 'caption'); route.addWidget(self.lan_summary)
-        button('Настроить правила', lambda: self.tabs.setCurrentIndex(3), route, 'text', 'rules')
         _, dns = card(right, 'compactCard')
         dns.addWidget(label('DNS', 'cardTitle'))
-        self.dns_summary = label('Настройки загружаются…', 'body'); dns.addWidget(self.dns_summary)
-        button('Изменить DNS', lambda: self.tabs.setCurrentIndex(5), dns, 'text', 'settings')
+        self.dns_summary = label(tr('Настройки загружаются…'), 'body'); dns.addWidget(self.dns_summary)
+        button(tr('Изменить DNS'), lambda: self.tabs.setCurrentIndex(5), dns, 'text', 'settings')
         _, quick = card(right, 'compactCard')
-        self.library_summary = label('Ваши подключения', 'cardTitle'); quick.addWidget(self.library_summary)
-        button('Добавить подключение', self.import_profiles, quick, '', 'plus')
-        button('Обновить подписки', lambda: self.mutate('subscriptions_update'), quick, 'text', 'refresh')
+        self.library_summary = label(tr('Ваши подключения'), 'cardTitle'); quick.addWidget(self.library_summary)
+        button(tr('Добавить подключение'), self.import_profiles, quick, '', 'plus')
+        button(tr('Обновить подписки'), lambda: self.mutate('subscriptions_update'), quick, 'text', 'refresh')
         right.addStretch()
         row.addLayout(right, 2)
         l.addLayout(row, 1)
-        l.addWidget(label('Можно закрыть окно — соединением продолжит управлять фоновый сервис.', 'caption'))
+        l.addWidget(label(tr('Можно закрыть окно — соединением продолжит управлять фоновый сервис.'), 'caption'))
+
+    def preview_preset(self, *_):
+        preset = self.preset_picker.currentData()
+        detail = tr(preset_description(preset)) if preset else tr('Выберите новый пресет. Действующий маршрут сохранён.')
+        self.preset_info_button.setToolTip(detail)
+        self.preset_picker.setToolTip((tr(PRESETS[preset]) + '\n' if preset else '') + detail)
+        self.preset_picker.setAccessibleDescription(detail)
+        if self.config:
+            self.active_route.setVisible(preset != self.config['preset'])
+            chosen = next((p for p in self.config['profiles'] if p['id'] == self.config['selected']), {})
+            self.apply_preset_button.setEnabled(chosen.get('kind') != 'zerotier' and preset in available_presets(self.config['settings']['country']))
+
+    def describe_preset(self):
+        QMessageBox.information(self, tr('Маршрут'), self.preset_info_button.toolTip())
 
     def toggle_connection(self):
         self.mutate('disconnect' if self.connection_desired else 'connect', {} if self.connection_desired else {'profile_id': self.profile_picker.currentData()})
 
     def show_status(self, s):
-        names = {'disconnected': 'Отключено', 'running': 'VPN включён', 'connected': 'Подключено', 'connecting': 'Подключение…', 'authorizing': 'Ждём авторизацию', 'error': 'Ошибка подключения'}
+        names = {'disconnected': tr('Отключено'), 'running': tr('VPN включён'), 'connected': tr('Подключено'), 'connecting': tr('Подключение…'), 'authorizing': tr('Ждём авторизацию'), 'error': tr('Ошибка подключения')}
         self.state_title.setText(names.get(s['state'], s['state']))
         details = [s.get('message', '')]
         if s.get('error'): details.append(s['error'])
@@ -369,35 +402,37 @@ class Window(QMainWindow):
         if s.get('last_probe'): details.append(s['last_probe']['message'])
         self.state_label.setText('\n'.join(x for x in details if x))
         active = bool(s.get('guard'))
-        self.guard_badge.setText('Защита включена' if active else 'Защита выключена')
+        self.guard_badge.setText(tr('Защита включена') if active else tr('Защита выключена'))
         self.guard_badge.setProperty('active', active)
         self.guard_badge.style().unpolish(self.guard_badge); self.guard_badge.style().polish(self.guard_badge)
-        self.service_badge.setText('Сервис на связи')
+        self.service_badge.setText(tr('Сервис на связи'))
         self.connection_desired = bool(s.get('desired'))
-        self.connect_button.setText('Отключить' if self.connection_desired else 'Подключить')
+        self.connect_button.setText(tr('Отключить') if self.connection_desired else tr('Подключить'))
         self.connect_button.setEnabled(bool(s.get('profiles')) or self.connection_desired)
         chosen = next((p for p in s['profiles'] if p['id'] == s['selected']), {})
         self.preset_picker.setEnabled(chosen.get('protocol') != 'zerotier')
+        self.apply_preset_button.setEnabled(chosen.get('protocol') != 'zerotier' and self.preset_picker.currentData() in available_presets(self.config['settings']['country']) if self.config else False)
         if self.profile_picker.currentData() != s['selected']:
             self.profile_picker.setCurrentIndex(self.profile_picker.findData(s['selected']))
-        self.preset_picker.setCurrentIndex(self.preset_picker.findData(s['preset']))
+        if self.config and (s.get('language', 'ru') != language() or s.get('country', 'ru') != self.config['settings'].get('country', 'ru') or s['preset'] != self.config['preset']):
+            self.request('configuration', callback=self.loaded, quiet=True)
 
     def build_profiles(self):
-        l = self.page('Профили')
+        l = self.page(tr('Профили'))
         row = QHBoxLayout()
-        button('Добавить', self.import_profiles, row, 'primary', 'plus')
+        button(tr('Добавить'), self.import_profiles, row, 'primary', 'plus')
         row.addStretch()
-        button('Изменить', self.edit_profile, row, '', 'edit')
-        button('Удалить', lambda: self.delete_selected('profile_delete', self.profiles), row, 'danger', 'delete')
+        button(tr('Изменить'), self.edit_profile, row, '', 'edit')
+        button(tr('Удалить'), lambda: self.delete_selected('profile_delete', self.profiles), row, 'danger', 'delete')
         l.addLayout(row)
-        self.profiles = self.collection('Профили подключений'); l.addWidget(self.profiles, 1)
-        self.profiles_empty = self.empty('Добавьте первое подключение', 'Импортируйте ссылку, конфигурацию или создайте WARP.')
+        self.profiles = self.collection(tr('Профили подключений')); l.addWidget(self.profiles, 1)
+        self.profiles_empty = self.empty(tr('Добавьте первое подключение'), tr('Импортируйте ссылку, конфигурацию или создайте WARP.'))
         l.addWidget(self.profiles_empty, 1)
         _, shortcuts = card(l)
-        shortcuts.addWidget(label('Другие подключения', 'cardTitle'))
+        shortcuts.addWidget(label(tr('Другие подключения'), 'cardTitle'))
         actions = QHBoxLayout()
         button('Cloudflare WARP', self.generate_warp, actions, '', 'warp')
-        button('Сеть ZeroTier', self.add_zerotier, actions, '', 'network')
+        button(tr('Сеть ZeroTier'), self.add_zerotier, actions, '', 'network')
         shortcuts.addLayout(actions)
 
     def selected_item(self, widget, kind):
@@ -409,23 +444,23 @@ class Window(QMainWindow):
     def delete_selected(self, method, widget):
         kinds = {"profile_delete": "profiles", "subscription_delete": "subscriptions", "list_delete": "lists"}
         item = self.selected_item(widget, kinds[method])
-        if item and QMessageBox.question(self, "Удаление", "Удалить «" + item["name"] + "»?") == QMessageBox.Yes:
+        if item and QMessageBox.question(self, tr("Удаление"), tr("Удалить «") + item["name"] + "»?") == QMessageBox.Yes:
             self.mutate(method, {"id": item["id"]})
 
     def import_profiles(self):
         text = area()
-        text.setPlaceholderText("Вставьте ссылку, список ссылок, sing-box/Xray JSON, WARP/WireGuard/AmneziaWG .conf, автономный OpenVPN .ovpn или клиентский vpn:// экспорт Amnezia.")
-        d = Form("Добавить подключения", {"text": ("Конфигурация", text)}, self)
+        text.setPlaceholderText(tr("Вставьте ссылку, список ссылок, sing-box/Xray JSON, WARP/WireGuard/AmneziaWG .conf, автономный OpenVPN .ovpn или клиентский vpn:// экспорт Amnezia."))
+        d = Form(tr("Добавить подключения"), {"text": (tr("Конфигурация"), text)}, self)
         def load():
-            path, _ = QFileDialog.getOpenFileName(d, "Импортировать", "", "Конфигурации (*.conf *.ovpn *.json *.txt);;Все файлы (*)")
+            path, _ = QFileDialog.getOpenFileName(d, tr("Импортировать"), "", tr("Конфигурации (*.conf *.ovpn *.json *.txt);;Все файлы (*)"))
             if path:
                 try:
                     if Path(path).stat().st_size > MAX_BYTES:
                         raise ValueError()
                     text.setPlainText(Path(path).read_text())
                 except (OSError, UnicodeError, ValueError):
-                    QMessageBox.warning(d, "Импорт", "Файл не читается или больше 8 МиБ.")
-        button("Открыть файл…", load, d.layout())
+                    QMessageBox.warning(d, tr("Импорт"), tr("Файл не читается или больше 8 МиБ."))
+        button(tr("Открыть файл…"), load, d.layout())
         if d.exec() == QDialog.Accepted:
             self.mutate("import", {"text": text.toPlainText()})
 
@@ -435,53 +470,53 @@ class Window(QMainWindow):
             return
         text = "zerotier://" + p["network_id"] if p["kind"] == "zerotier" else json.dumps(p["outbound"], ensure_ascii=False, indent=2)
         name, config, dns = line(p["name"]), area(text), line(p.get("dns", ""))
-        d = Form("Изменить профиль", {"name": ("Название", name), "dns": ("DNS внутри VPN (IP, необязательно)", dns), "text": ("Параметры подключения", config)}, self)
+        d = Form(tr("Изменить профиль"), {"name": (tr("Название"), name), "dns": (tr("DNS внутри VPN (IP, необязательно)"), dns), "text": (tr("Параметры подключения"), config)}, self)
         if d.exec() == QDialog.Accepted:
             self.mutate("profile_save", {"id": p["id"], "name": name.text(), "dns": dns.text(), "text": config.toPlainText()})
 
     def generate_warp(self):
-        info = QLabel("Создаёт WARP через wgcf. По умолчанию — AmneziaWG с I1 и junk-пакетами, как в конфигурациях warpgen. Ключи и учётная запись сохраняются локально; повторный запуск использует ту же учётную запись. Регистрация обращается к Cloudflare и может быть ограничена сервисом.")
+        info = QLabel(tr("Создаёт WARP через wgcf. По умолчанию — AmneziaWG с I1 и junk-пакетами, как в конфигурациях warpgen. Ключи и учётная запись сохраняются локально; повторный запуск использует ту же учётную запись. Регистрация обращается к Cloudflare и может быть ограничена сервисом."))
         info.setWordWrap(True)
-        terms = QLabel('<a href="' + TERMS + '">Условия Cloudflare</a>')
+        terms = QLabel('<a href="' + TERMS + tr('">Условия Cloudflare</a>'))
         terms.setOpenExternalLinks(True)
-        consent = QCheckBox("Я принимаю условия Cloudflare для регистрации WARP")
-        mode = combo({"awg": "AmneziaWG (с маскировкой)", "wireguard": "WireGuard (обычный)"})
+        consent = QCheckBox(tr("Я принимаю условия Cloudflare для регистрации WARP"))
+        mode = combo({"awg": tr("AmneziaWG (с маскировкой)"), "wireguard": tr("WireGuard (обычный)")})
         endpoint = line("")
-        endpoint.setPlaceholderText("Необязательно: адрес:порт или [IPv6]:порт")
-        d = Form("Cloudflare WARP", {"info": ("", info), "mode": ("Режим", mode), "endpoint": ("Свой endpoint", endpoint), "terms": ("", terms), "consent": ("", consent)}, self)
+        endpoint.setPlaceholderText(tr("Необязательно: адрес:порт или [IPv6]:порт"))
+        d = Form("Cloudflare WARP", {"info": ("", info), "mode": (tr("Режим"), mode), "endpoint": (tr("Свой endpoint"), endpoint), "terms": ("", terms), "consent": ("", consent)}, self)
         save = d.findChild(QDialogButtonBox).button(QDialogButtonBox.Save)
-        save.setText("Создать профиль")
+        save.setText(tr("Создать профиль"))
         save.setEnabled(False)
         consent.toggled.connect(save.setEnabled)
         if d.exec() == QDialog.Accepted:
             self.request("warp_generate", {"accept_terms": consent.isChecked(), "mode": mode.currentData(), "endpoint": endpoint.text()}, lambda result: (self.refresh(), QMessageBox.information(self, "WARP", result["message"])))
 
     def add_zerotier(self):
-        value, ok = QInputDialog.getText(self, "ZeroTier", "Network ID (16 символов):")
+        value, ok = QInputDialog.getText(self, "ZeroTier", tr("Network ID (16 символов):"))
         if ok:
             self.mutate("import", {"text": "zerotier://" + value.strip()})
 
     def build_subscriptions(self):
-        l = self.page('Подписки')
+        l = self.page(tr('Подписки'))
         row = QHBoxLayout()
-        button('Добавить', lambda: self.edit_subscription(), row, 'primary', 'plus')
+        button(tr('Добавить'), lambda: self.edit_subscription(), row, 'primary', 'plus')
         row.addStretch()
-        button('Изменить', lambda: self.edit_subscription(self.selected_item(self.subscriptions, 'subscriptions')), row, '', 'edit')
-        button('Удалить', lambda: self.delete_selected('subscription_delete', self.subscriptions), row, 'danger', 'delete')
+        button(tr('Изменить'), lambda: self.edit_subscription(self.selected_item(self.subscriptions, 'subscriptions')), row, '', 'edit')
+        button(tr('Удалить'), lambda: self.delete_selected('subscription_delete', self.subscriptions), row, 'danger', 'delete')
         l.addLayout(row)
-        self.subscriptions = self.collection('Подписки'); l.addWidget(self.subscriptions, 1)
-        self.subscriptions_empty = self.empty('Здесь будут ваши подписки', 'Добавьте HTTPS-ссылку от провайдера. Параметры HWID задаются при добавлении.')
+        self.subscriptions = self.collection(tr('Подписки')); l.addWidget(self.subscriptions, 1)
+        self.subscriptions_empty = self.empty(tr('Здесь будут ваши подписки'), tr('Добавьте HTTPS-ссылку от провайдера. Параметры HWID задаются при добавлении.'))
         l.addWidget(self.subscriptions_empty, 1)
         row = QHBoxLayout()
-        button('Обновить выбранную', self.update_subscription, row, '', 'refresh')
-        button('Обновить все', lambda: self.mutate('subscriptions_update'), row, 'text')
+        button(tr('Обновить выбранную'), self.update_subscription, row, '', 'refresh')
+        button(tr('Обновить все'), lambda: self.mutate('subscriptions_update'), row, 'text')
         l.addLayout(row)
-        hwid = disclosure('Идентификатор устройства · общий HWID', l)
-        hwid.addWidget(label('Случайный ID без серийных номеров. Подписка может использовать свой HWID.', 'caption'))
-        self.hwid = line(); self.hwid.setAccessibleName('Общий HWID'); hwid.addWidget(self.hwid)
+        hwid = disclosure(tr('Идентификатор устройства · общий HWID'), l)
+        hwid.addWidget(label(tr('Случайный ID без серийных номеров. Подписка может использовать свой HWID.'), 'caption'))
+        self.hwid = line(); self.hwid.setAccessibleName(tr('Общий HWID')); hwid.addWidget(self.hwid)
         row = QHBoxLayout()
-        button('Сохранить HWID', lambda: self.mutate('hwid', {'value': self.hwid.text()}), row, 'primary')
-        button('Сгенерировать новый', lambda: self.mutate('hwid', {'value': ''}), row, 'text', 'refresh')
+        button(tr('Сохранить HWID'), lambda: self.mutate('hwid', {'value': self.hwid.text()}), row, 'primary')
+        button(tr('Сгенерировать новый'), lambda: self.mutate('hwid', {'value': ''}), row, 'text', 'refresh')
         hwid.addLayout(row)
 
     def update_subscription(self):
@@ -491,15 +526,15 @@ class Window(QMainWindow):
 
     def edit_subscription(self, sub=None):
         sub = sub or {}
-        name = line(sub.get("name", "Подписка"))
+        name = line(sub.get("name", tr("Подписка")))
         url = line(sub.get("url", ""), secret=True)
         interval = integer(sub.get("interval_hours", 24), 0, 720)
-        mode = combo({"none": "Не передавать", "remnawave": "HWID / NekoBox_SF / Remnawave", "header": "Указанный HTTP-заголовок", "query": "Указанный параметр URL"})
+        mode = combo({"none": tr("Не передавать"), "remnawave": "HWID / NekoBox_SF / Remnawave", "header": tr("Указанный HTTP-заголовок"), "query": tr("Указанный параметр URL")})
         mode.setCurrentIndex(mode.findData(sub.get("hwid_mode", "none")))
         hwid_name = line(sub.get("hwid_name", "x-hwid"))
         hwid = line(sub.get("hwid", ""))
         hwid_params = area(sub.get("hwid_params", ""))
-        hwid_params.setPlaceholderText("hwid=ваш_id,os=Android,osVersion=16,model=ваша модель\nПусто — HWID и описание Steam Deck. Заполнено — только перечисленные поля.")
+        hwid_params.setPlaceholderText(tr("hwid=ваш_id,os=Android,osVersion=16,model=ваша модель\nПусто — HWID и описание Steam Deck. Заполнено — только перечисленные поля."))
         user_agent = line(subscription_agent(sub.get("user_agent")))
         user_agent.setPlaceholderText("Clash Meta: NekoBox/Android/2.00; JSON: sing-box/1.14.3")
         headers = area(json.dumps(sub.get("headers", {}), ensure_ascii=False, indent=2))
@@ -509,8 +544,8 @@ class Window(QMainWindow):
             hwid_params.setEnabled(mode.currentData() == "remnawave")
         mode.currentIndexChanged.connect(mode_changed)
         mode_changed()
-        fields = {"name": ("Название", name), "url": ("HTTPS URL", url), "user_agent": ("User-Agent / формат ответа", user_agent), "interval": ("Обновление, ч (0 — вручную)", interval), "mode": ("Передача HWID", mode), "hwid_name": ("Имя заголовка / query-параметра", hwid_name), "hwid": ("Свой HWID (пусто — общий)", hwid), "hwid_params": ("Параметры как в NekoBox_SF", hwid_params), "headers": ("Дополнительные HTTP-заголовки (JSON)", headers)}
-        d = Form("Подписка", fields, self, advanced=('user_agent', 'hwid_name', 'headers'))
+        fields = {"name": (tr("Название"), name), "url": ("HTTPS URL", url), "user_agent": (tr("User-Agent / формат ответа"), user_agent), "interval": (tr("Обновление, ч (0 — вручную)"), interval), "mode": (tr("Передача HWID"), mode), "hwid_name": (tr("Имя заголовка / query-параметра"), hwid_name), "hwid": (tr("Свой HWID (пусто — общий)"), hwid), "hwid_params": (tr("Параметры как в NekoBox_SF"), hwid_params), "headers": (tr("Дополнительные HTTP-заголовки (JSON)"), headers)}
+        d = Form(tr("Подписка"), fields, self, advanced=('user_agent', 'hwid_name', 'headers'))
         def visibility_changed():
             selected = mode.currentData()
             d.show_field('hwid', selected != 'none')
@@ -518,12 +553,12 @@ class Window(QMainWindow):
             d.show_field('hwid_name', selected in {'header', 'query'})
         mode.currentIndexChanged.connect(visibility_changed)
         visibility_changed()
-        d.findChild(QDialogButtonBox).button(QDialogButtonBox.Save).setText("Сохранить и обновить")
+        d.findChild(QDialogButtonBox).button(QDialogButtonBox.Save).setText(tr("Сохранить и обновить"))
         if d.exec() == QDialog.Accepted:
             try:
                 extra = json.loads(headers.toPlainText())
             except ValueError:
-                QMessageBox.warning(self, "Подписка", "Заголовки должны быть JSON-объектом.")
+                QMessageBox.warning(self, tr("Подписка"), tr("Заголовки должны быть JSON-объектом."))
                 return
             def saved(result):
                 self.refresh()
@@ -531,25 +566,25 @@ class Window(QMainWindow):
             self.request("subscription_save", {"id": sub.get("id"), "name": name.text(), "url": url.text(), "interval_hours": interval.value(), "hwid_mode": mode.currentData(), "hwid_name": hwid_name.text(), "hwid": hwid.text(), "hwid_params": hwid_params.toPlainText(), "user_agent": user_agent.text(), "headers": extra}, saved)
 
     def build_rules(self):
-        l = self.page("Правила")
-        info = label("Правила применяются сверху вниз. Перетаскивайте их, чтобы изменить порядок.", "caption")
+        l = self.page(tr("Правила"))
+        info = label(tr("Правила применяются сверху вниз. Перетаскивайте их, чтобы изменить порядок."), "caption")
         info.setWordWrap(True)
         l.addWidget(info)
-        self.rules = self.collection("Правила, сверху вниз")
+        self.rules = self.collection(tr("Правила, сверху вниз"))
         self.rules.setDragDropMode(QListWidget.InternalMove)
-        self.rules.setAccessibleName("Правила, сверху вниз")
+        self.rules.setAccessibleName(tr("Правила, сверху вниз"))
         l.addWidget(self.rules)
-        self.rules_empty = self.empty('Добавьте своё правило', 'Направьте выбранные домены, адреса или приложения через VPN, напрямую или заблокируйте их. Правила выбранного сценария действуют и без пользовательских правил.')
+        self.rules_empty = self.empty(tr('Добавьте своё правило'), tr('Направьте выбранные домены, адреса или приложения через VPN, напрямую или заблокируйте их. Правила выбранного сценария действуют и без пользовательских правил.'))
         l.addWidget(self.rules_empty, 1)
         row = QHBoxLayout()
-        button("Добавить", lambda: self.edit_rule(), row, 'primary', 'plus')
-        button("Изменить", lambda: self.edit_rule(self.rules.currentRow()), row, '', 'edit')
-        button("Удалить", self.remove_rule, row, 'danger', 'delete')
+        button(tr("Добавить"), lambda: self.edit_rule(), row, 'primary', 'plus')
+        button(tr("Изменить"), lambda: self.edit_rule(self.rules.currentRow()), row, '', 'edit')
+        button(tr("Удалить"), self.remove_rule, row, 'danger', 'delete')
         l.addLayout(row)
         row = QHBoxLayout()
-        button("Выше", lambda: self.move_rule(-1), row)
-        button("Ниже", lambda: self.move_rule(1), row)
-        button("Применить порядок", self.save_rules, row)
+        button(tr("Выше"), lambda: self.move_rule(-1), row)
+        button(tr("Ниже"), lambda: self.move_rule(1), row)
+        button(tr("Применить порядок"), self.save_rules, row)
         l.addLayout(row)
 
     def rule_items(self):
@@ -560,7 +595,7 @@ class Window(QMainWindow):
         self.rules.setVisible(bool(rules))
         self.rules_empty.setVisible(not rules)
         for r in rules:
-            self.rules.addItem(QListWidgetItem(icon("rules"), r["name"] + "\n" + ("Включено" if r["enabled"] else "Выключено") + " · " + r["type"] + " → " + {"direct":"Напрямую", "proxy":"Через подключение", "block":"Блокировать"}[r["action"]]))
+            self.rules.addItem(QListWidgetItem(icon("rules"), r["name"] + "\n" + (tr("Включено") if r["enabled"] else tr("Выключено")) + " · " + r["type"] + " → " + {"direct":tr("Напрямую"), "proxy":tr("Через подключение"), "block":tr("Блокировать")}[r["action"]]))
             self.rules.item(self.rules.count() - 1).setData(Qt.UserRole, r)
 
     def edit_rule(self, index=None):
@@ -568,17 +603,17 @@ class Window(QMainWindow):
             return
         items = self.rule_items()
         r = items[index] if index is not None and 0 <= index < len(items) else {}
-        name = line(r.get("name", "Правило"))
-        kind = combo({"domain_suffix": "Домен и поддомены", "domain": "Точный домен", "ip_cidr": "IP / CIDR", "list": "Набор доменов / IP", "process_name": "Имя процесса (Linux)", "process_path": "Путь процесса (Linux)", "port": "Порт назначения"})
+        name = line(r.get("name", tr("Правило")))
+        kind = combo({"domain_suffix": tr("Домен и поддомены"), "domain": tr("Точный домен"), "ip_cidr": "IP / CIDR", "list": tr("Набор доменов / IP"), "process_name": tr("Имя процесса (Linux)"), "process_path": tr("Путь процесса (Linux)"), "port": tr("Порт назначения")})
         kind.setCurrentIndex(kind.findData(r.get("type", "domain_suffix")))
         values = area("\n".join(str(x) for x in r.get("values", [])))
-        action = combo({"proxy": "Через выбранный VPN", "direct": "Напрямую", "block": "Блокировать"})
+        action = combo({"proxy": tr("Через выбранный VPN"), "direct": tr("Напрямую"), "block": tr("Блокировать")})
         action.setCurrentIndex(action.findData(r.get("action", "proxy")))
-        enabled = QCheckBox("Правило включено")
+        enabled = QCheckBox(tr("Правило включено"))
         enabled.setChecked(r.get("enabled", True))
-        hints = QLabel("Для набора укажите ID из вкладки «Списки». По одному значению на строку.")
+        hints = QLabel(tr("Для набора укажите ID из вкладки «Списки». По одному значению на строку."))
         hints.setWordWrap(True)
-        d = Form("Правило", {"name": ("Название", name), "kind": ("Условие", kind), "values": ("Значения", values), "hint": ("", hints), "action": ("Действие", action), "enabled": ("", enabled)}, self)
+        d = Form(tr("Правило"), {"name": (tr("Название"), name), "kind": (tr("Условие"), kind), "values": (tr("Значения"), values), "hint": ("", hints), "action": (tr("Действие"), action), "enabled": ("", enabled)}, self)
         if d.exec() == QDialog.Accepted:
             new = {"name": name.text(), "type": kind.currentData(), "values": values.toPlainText().splitlines(), "action": action.currentData(), "enabled": enabled.isChecked()}
             if r:
@@ -606,24 +641,24 @@ class Window(QMainWindow):
             self.save_rules()
 
     def build_lists(self):
-        l = self.page("Списки")
-        self.lists = self.collection("Списки адресов")
+        l = self.page(tr("Списки"))
+        self.lists = self.collection(tr("Списки адресов"))
         l.addWidget(self.lists)
         row = QHBoxLayout()
-        button("Добавить", lambda: self.add_list(), row)
-        button("Изменить", lambda: self.add_list(self.selected_item(self.lists, "lists")), row)
-        button("Обновить выбранный", self.update_list, row)
-        button("Удалить", lambda: self.delete_selected("list_delete", self.lists), row)
+        button(tr("Добавить"), lambda: self.add_list(), row)
+        button(tr("Изменить"), lambda: self.add_list(self.selected_item(self.lists, "lists")), row)
+        button(tr("Обновить выбранный"), self.update_list, row)
+        button(tr("Удалить"), lambda: self.delete_selected("list_delete", self.lists), row)
         l.addLayout(row)
-        button("Скопировать ID", self.copy_list_id, l)
-        hint = QLabel("Общественные российские списки — ориентир для маршрутизации, а не точная карта блокировок. До загрузки пресета они не скачиваются. Пользовательские правила сохраняются при смене сценария.")
+        button(tr("Скопировать ID"), self.copy_list_id, l)
+        hint = QLabel(tr("Региональные списки — ориентир для маршрутизации, а не точная карта блокировок. Они скачиваются при применении пресета. Пользовательские правила сохраняются при смене страны и сценария."))
         hint.setWordWrap(True)
         l.addWidget(hint)
 
     def add_list(self, item=None, contents=None):
         item = item or {}
-        if item.get("id", "").startswith("ru-"):
-            QMessageBox.information(self, "Списки", "Для изменения встроенного списка создайте пользовательскую копию.")
+        if item.get('id') in BUILTIN_LISTS:
+            QMessageBox.information(self, tr("Списки"), tr("Для изменения встроенного списка создайте пользовательскую копию."))
             return
         existing = ""
         if item.get("path") and not item.get("url"):
@@ -631,10 +666,10 @@ class Window(QMainWindow):
                 self.request("list_content", {"id": item["id"]}, callback=lambda data: self.add_list(item, data["content"]))
                 return
             existing = contents
-        name, url, content = line(item.get("name", "Мой список")), line(item.get("url", "")), area(existing)
-        fmt = combo({"text": "Текст: домен или CIDR на строку", "source": "sing-box source JSON", "srs": "sing-box SRS по HTTPS"})
+        name, url, content = line(item.get("name", tr("Мой список"))), line(item.get("url", "")), area(existing)
+        fmt = combo({"text": tr("Текст: домен или CIDR на строку"), "source": "sing-box source JSON", "srs": tr("sing-box SRS по HTTPS")})
         fmt.setCurrentIndex(fmt.findData("source" if existing else item.get("format", "text")))
-        d = Form("Добавить список", {"name": ("Название", name), "url": ("HTTPS URL (необязательно)", url), "format": ("Формат", fmt), "content": ("Или содержимое списка", content)}, self)
+        d = Form(tr("Добавить список"), {"name": (tr("Название"), name), "url": (tr("HTTPS URL (необязательно)"), url), "format": (tr("Формат"), fmt), "content": (tr("Или содержимое списка"), content)}, self)
         if d.exec() == QDialog.Accepted:
             self.mutate("list_save", {"id": item.get("id"), "name": name.text(), "url": url.text(), "format": fmt.currentData(), **({"content": content.toPlainText()} if content.toPlainText().strip() else {})})
 
@@ -649,47 +684,58 @@ class Window(QMainWindow):
             QApplication.clipboard().setText(item["id"])
 
     def build_settings(self):
-        l = self.page("Настройки")
+        l = self.page(tr("Настройки"))
+        _, preferences = card(l)
+        form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+        self.language_picker = combo({'ru': 'Русский', 'en': 'English'})
+        self.country_picker = combo({key: tr(name) for key, name in COUNTRIES.items()})
+        self.language_picker.activated.connect(lambda _: self.mutate('preferences', {'language': self.language_picker.currentData()}))
+        self.country_picker.activated.connect(lambda _: self.mutate('preferences', {'country': self.country_picker.currentData()}))
+        form.addRow(tr('Язык интерфейса'), self.language_picker)
+        form.addRow(tr('Страна маршрутизации'), self.country_picker)
+        preferences.addLayout(form)
+        preferences.addWidget(label(tr('Язык и страна независимы. Страна меняет доступные пресеты, а не VPN-сервер. Выберите и примените маршрут на странице подключения; действующий маршрут сохраняется до применения.'), 'caption'))
         self.setting_widgets = {}
         _, protection = card(l)
-        protection.addWidget(label('Защита и локальная сеть', 'cardTitle'))
-        for key, name in {"auto_connect": "Подключать при загрузке Steam Deck", "kill_switch": "Блокировать прямой выход при сбое VPN", "lan": "Доступ к локальной сети и Remote Play", "ipv6": "Разрешить IPv6 через правила"}.items():
+        protection.addWidget(label(tr('Защита и локальная сеть'), 'cardTitle'))
+        for key, name in {"auto_connect": tr("Подключать при загрузке Steam Deck"), "kill_switch": tr("Блокировать прямой выход при сбое VPN"), "lan": tr("Доступ к локальной сети и Remote Play"), "ipv6": tr("Разрешить IPv6 через правила")}.items():
             w = Switch(name)
             protection.addWidget(w)
             self.setting_widgets[key] = w
-        protection.addWidget(label('Автоподключение выключено по умолчанию. Восстановление уже включённого VPN после сбоя и сна работает независимо.', 'caption'))
+        protection.addWidget(label(tr('Автоподключение выключено по умолчанию. Восстановление уже включённого VPN после сбоя и сна работает независимо.'), 'caption'))
         dns_row = QHBoxLayout(); dns_row.setSpacing(16)
-        for key, name in [("dns_proxy", "DNS через VPN"), ("dns_direct", "DNS прямых запросов")]:
+        for key, name in [("dns_proxy", tr("DNS через VPN")), ("dns_direct", tr("DNS прямых запросов"))]:
             frame, body = card()
             body.addWidget(label(name, 'cardTitle'))
-            body.addWidget(label('Защищённый DNS · DoH / DoT', 'caption'))
+            body.addWidget(label(tr('Защищённый DNS · DoH / DoT'), 'caption'))
             w = DNSSelector()
             body.addWidget(w)
             self.setting_widgets[key] = w
             dns_row.addWidget(frame, 1)
         l.addLayout(dns_row)
-        l.addWidget(label('Можно выбрать готовый сервер или ввести свой адрес. DNS из профиля WG/AWG имеет приоритет для запросов через VPN. При ошибке DoH/DoT перехода на обычный DNS нет.', 'caption'))
-        advanced = disclosure('Параметры сети и восстановления', l)
+        l.addWidget(label(tr('Можно выбрать готовый сервер или ввести свой адрес. DNS из профиля WG/AWG имеет приоритет для запросов через VPN. При ошибке DoH/DoT перехода на обычный DNS нет.'), 'caption'))
+        advanced = disclosure(tr('Параметры сети и восстановления'), l)
         form = QFormLayout(); form.setVerticalSpacing(12)
         form.setRowWrapPolicy(QFormLayout.WrapLongRows)
         form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
         advanced.addLayout(form)
-        for key, name, low, high in [("mtu", "MTU TUN", 1280, 9000), ("reconnect_seconds", "Повтор подключения, с", 5, 300), ("list_update_hours", "Обновление списков, ч", 1, 720)]:
+        for key, name, low, high in [("mtu", "MTU TUN", 1280, 9000), ("reconnect_seconds", tr("Повтор подключения, с"), 5, 300), ("list_update_hours", tr("Обновление списков, ч"), 1, 720)]:
             w = integer(low, low, high)
             w.setAccessibleName(name)
             form.addRow(name, w)
             self.setting_widgets[key] = w
         w = line()
-        form.addRow("Начальный DNS (UDP, IP)", w)
+        form.addRow(tr("Начальный DNS (UDP, IP)"), w)
         self.setting_widgets["dns_bootstrap"] = w
-        advanced.addWidget(label('Начальный DNS разрешает имена серверов до подключения и локальные .lan / .local / .home.arpa.', 'caption'))
-        w = combo({"proxy": "VPN", "direct": "Напрямую", "block": "Блокировать"})
-        form.addRow("Маршрут в «Моих правилах»", w)
+        advanced.addWidget(label(tr('Начальный DNS разрешает имена серверов до подключения и локальные .lan / .local / .home.arpa.'), 'caption'))
+        w = combo({"proxy": "VPN", "direct": tr("Напрямую"), "block": tr("Блокировать")})
+        form.addRow(tr("Маршрут в «Моих правилах»"), w)
         self.setting_widgets["default_action"] = w
         row = QHBoxLayout()
-        button("Сохранить и применить", self.save_settings, row, 'primary')
+        button(tr("Сохранить и применить"), self.save_settings, row, 'primary')
         row.addStretch()
-        button("О программе", lambda: QMessageBox.information(self, "Helmsman", f"Helmsman {VERSION}\nGPL-3.0-only, без гарантий. Исходники и лицензии компонентов включены в архив релиза.\nСетевые движки: SagerNet/sing-box, Throne/sing-box, Xray-core, wgcf и ZeroTier Agent (MPL-2.0, без nonfree controller).\nhttps://github.com/ISAIandCO/Helmsman"), row, 'text')
+        button(tr("О программе"), lambda: QMessageBox.information(self, "Helmsman", tr(f"Helmsman {VERSION}\nGPL-3.0-only, без гарантий. Исходники и лицензии компонентов включены в архив релиза.\nСетевые движки: SagerNet/sing-box, Throne/sing-box, Xray-core, wgcf и ZeroTier Agent (MPL-2.0, без nonfree controller).\nhttps://github.com/ISAIandCO/Helmsman")), row, 'text')
         l.addLayout(row)
         l.addStretch()
 
@@ -700,17 +746,23 @@ class Window(QMainWindow):
         self.mutate("settings_save", {"settings": result})
 
     def build_diagnostics(self):
-        l = self.page("Диагностика")
-        l.addWidget(label('Отчёт исключает ключи и содержимое подписок. Его можно скопировать для обращения с ошибкой.', 'caption'))
+        l = self.page(tr("Диагностика"))
+        l.addWidget(label(tr('Отчёт исключает ключи и содержимое подписок. Его можно скопировать для обращения с ошибкой.'), 'caption'))
         self.diagnostics = area()
         self.diagnostics.setReadOnly(True)
         l.addWidget(self.diagnostics)
         row = QHBoxLayout()
-        button("Собрать отчёт", lambda: self.request("diagnostics", callback=lambda r: self.diagnostics.setPlainText(json.dumps(r, ensure_ascii=False, indent=2))), row, 'primary', 'refresh')
-        button('Скопировать', lambda: QApplication.clipboard().setText(self.diagnostics.toPlainText()), row)
+        button(tr("Собрать отчёт"), lambda: self.request("diagnostics", callback=lambda r: self.diagnostics.setPlainText(json.dumps(r, ensure_ascii=False, indent=2))), row, 'primary', 'refresh')
+        button(tr('Скопировать'), lambda: QApplication.clipboard().setText(self.diagnostics.toPlainText()), row)
         row.addStretch(); l.addLayout(row)
 
     def loaded(self, config):
+        target_language = config['settings'].get('language', 'ru')
+        if language() != target_language:
+            index = self.tabs.currentIndex()
+            set_language(target_language)
+            self.build_ui()
+            self.tabs.setCurrentIndex(index)
         selected = {kind: (self.selected_item(getattr(self, kind), kind) or {}).get('id') for kind in ('profiles', 'subscriptions', 'lists')}
         self.config = config
         self.profiles.clear()
@@ -722,10 +774,20 @@ class Window(QMainWindow):
         self.profiles.setVisible(bool(config['profiles']))
         self.profiles_empty.setVisible(not config['profiles'])
         self.profile_picker.setCurrentIndex(self.profile_picker.findData(config["selected"]))
-        self.preset_picker.setCurrentIndex(self.preset_picker.findData(config["preset"]))
+        country = config['settings'].get('country', 'ru')
+        self.language_picker.setCurrentIndex(self.language_picker.findData(target_language))
+        self.country_picker.setCurrentIndex(self.country_picker.findData(country))
+        self.preset_picker.blockSignals(True)
+        self.preset_picker.clear()
+        for key, name in available_presets(country).items():
+            self.preset_picker.addItem(tr(name), key)
+        self.preset_picker.setCurrentIndex(self.preset_picker.findData(config['preset']))
+        self.preset_picker.blockSignals(False)
+        self.active_route.setText(tr('Действует: ') + tr(PRESETS[config['preset']]))
+        self.preview_preset()
         self.subscriptions.clear()
         for s in config["subscriptions"]:
-            detail = s.get('error') or ('Обновлено ' + datetime.fromtimestamp(s['last_update']).strftime('%d.%m %H:%M') if s.get('last_update') else 'Ещё не обновлялась')
+            detail = translate_message(s.get('error', ''), language()) or (tr('Обновлено ') + datetime.fromtimestamp(s['last_update']).strftime('%d.%m %H:%M') if s.get('last_update') else tr('Ещё не обновлялась'))
             self.subscriptions.addItem(QListWidgetItem(icon('subscriptions'), s['name'] + '\n' + detail))
         self.subscriptions.setVisible(bool(config['subscriptions']))
         self.subscriptions_empty.setVisible(not config['subscriptions'])
@@ -733,17 +795,17 @@ class Window(QMainWindow):
         self.show_rules(config["rules"])
         self.lists.clear()
         for item in config["lists"]:
-            when = datetime.fromtimestamp(item["last_update"]).strftime("%d.%m.%Y %H:%M") if item.get("last_update") else "Не загружен"
-            self.lists.addItem(QListWidgetItem(icon('lists'), item['name'] + '\n' + (item.get('error') or when)))
+            when = datetime.fromtimestamp(item["last_update"]).strftime("%d.%m.%Y %H:%M") if item.get("last_update") else tr("Не загружен")
+            self.lists.addItem(QListWidgetItem(icon('lists'), (tr(BUILTIN_LISTS[item['id']][0]) if item['id'] in BUILTIN_LISTS else item['name']) + '\n' + (translate_message(item.get('error', ''), language()) or when)))
         for kind, previous in selected.items():
             view = getattr(self, kind)
             index = next((i for i, item in enumerate(config[kind]) if item['id'] == previous), 0)
             view.setCurrentRow(index if view.count() else -1)
-        self.library_summary.setText(f"Подключений: {len(config['profiles'])}")
-        self.lan_summary.setText('Локальная сеть доступна напрямую' if config['settings']['lan'] else 'Локальная сеть подчиняется правилам')
+        self.library_summary.setText(tr(f"Подключений: {len(config['profiles'])}"))
+        self.lan_summary.setText(tr('Локальная сеть доступна напрямую') if config['settings']['lan'] else tr('Локальная сеть подчиняется правилам'))
         settings = config['settings']
         chosen = next((p for p in config['profiles'] if p['id'] == config['selected']), {})
-        self.dns_summary.setText('Через VPN: ' + (chosen.get('dns') or urlsplit(resolver_url(settings['dns_proxy'])).hostname or '') + '\nНапрямую: ' + (urlsplit(resolver_url(settings['dns_direct'])).hostname or ''))
+        self.dns_summary.setText(tr('Через VPN: ') + (chosen.get('dns') or urlsplit(resolver_url(settings['dns_proxy'])).hostname or '') + tr('\nНапрямую: ') + (urlsplit(resolver_url(settings['dns_direct'])).hostname or ''))
         for key, w in self.setting_widgets.items():
             value = config["settings"][key]
             if isinstance(w, QCheckBox):
@@ -760,7 +822,7 @@ class Window(QMainWindow):
 
     def closeEvent(self, event):
         if self.workers:
-            self.statusBar().showMessage("Дождитесь завершения запроса к сервису.")
+            self.statusBar().showMessage(tr("Дождитесь завершения запроса к сервису."))
             event.ignore()
         else:
             event.accept()
