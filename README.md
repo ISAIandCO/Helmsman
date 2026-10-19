@@ -384,6 +384,8 @@ sudo /opt/helmsman/current/Helmsman ctl disconnect
 
 ## Технические сведения и лицензия
 
+Версия приложения задаётся только в корневом [`VERSION`](VERSION). Из него автоматически берутся версия Desktop/сервиса и User-Agent, метаданные Python-пакета, версия установленного плагина Decky, имена архивов и тег релиза. Не меняйте версию вручную в других файлах. Сборка запускается только вручную: **Actions → Build and release Helmsman → Run workflow**. Изменения кода, `VERSION`, документации и pull requests не запускают её автоматически. Для публикации релиза запускайте workflow для ветки `main`.
+
 [Подробности подбора стран и источников](docs/REGIONAL_ROUTING.md).
 
 [Совместимость протоколов и импорта](docs/COMPATIBILITY.md) · [Проверки и шаги испытаний на Steam Deck](docs/TESTING.md) · [Архитектура](docs/ARCHITECTURE.md) · [Лицензии компонентов](THIRD_PARTY.md).

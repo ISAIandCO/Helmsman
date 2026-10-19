@@ -3,11 +3,14 @@ import json
 import os
 import tempfile
 import uuid
+from importlib.metadata import version as package_version
 from pathlib import Path
 
 from .regions import PRESETS, RU_BASE, COUNTRIES
 
-VERSION = "1.0.0"
+# Source/frozen builds read the root VERSION; wheels use metadata derived from it.
+_version_file = Path(__file__).resolve().parents[1] / "VERSION"
+VERSION = _version_file.read_text().strip() if _version_file.is_file() else package_version("helmsman-vpn")
 MAX_BYTES = 8 * 1024 * 1024
 SOCKET = "/run/helmsman/control.sock"
 

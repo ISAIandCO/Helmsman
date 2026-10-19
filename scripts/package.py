@@ -20,7 +20,7 @@ def main():
     if stage.exists():
         shutil.rmtree(stage)
     stage.mkdir(parents=True)
-    subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--name", "Helmsman", "--paths", str(ROOT), "--add-data", "helmsman/warp-obfuscation.json:helmsman", "--add-data", "helmsman/locales:helmsman/locales", "packaging/entry.py"], cwd=ROOT, check=True)
+    subprocess.run([sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--onedir", "--name", "Helmsman", "--paths", str(ROOT), "--add-data", "VERSION:.", "--add-data", "helmsman/warp-obfuscation.json:helmsman", "--add-data", "helmsman/locales:helmsman/locales", "packaging/entry.py"], cwd=ROOT, check=True)
     shutil.copytree(ROOT / "dist" / "Helmsman", stage / "app")
     # QtGui's generic hook also collects PDF and virtual-keyboard plugins.
     # Steam supplies its own keyboard; neither plugin belongs in this app.
@@ -45,6 +45,9 @@ def main():
     plugin.mkdir()
     for name in ("main.py", "plugin.json", "package.json"):
         shutil.copy2(ROOT / "decky" / name, plugin / name)
+    metadata = json.loads((plugin / "package.json").read_text())
+    metadata["version"] = version
+    (plugin / "package.json").write_text(json.dumps(metadata, indent=2) + "\n")
     shutil.copytree(ROOT / "decky" / "dist", plugin / "dist")
     shutil.copy2(ROOT / "LICENSE", plugin / "LICENSE")
     # PyInstaller Qt remains dynamically linked and replaceable. Include the

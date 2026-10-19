@@ -384,6 +384,8 @@ When opening **[GitHub Issues](https://github.com/ISAIandCO/Helmsman/issues)**, 
 
 ## Technical information and licence
 
+Set the application version only in the root [`VERSION`](VERSION) file. Desktop/service and User-Agent versions, Python package metadata, the installed Decky plugin version, archive names and release tag are derived automatically. Do not edit versions manually in other files. Builds run only manually: **Actions → Build and release Helmsman → Run workflow**. Changes to code, `VERSION`, documentation and pull requests never start builds automatically. Select the `main` branch to publish a release.
+
 [Country selection and rule source details](docs/REGIONAL_ROUTING.md).
 
 [Protocol and import compatibility](docs/COMPATIBILITY.md) · [Checks and Steam Deck testing steps](docs/TESTING.md) · [Architecture](docs/ARCHITECTURE.md) · [Component licences](THIRD_PARTY.md).

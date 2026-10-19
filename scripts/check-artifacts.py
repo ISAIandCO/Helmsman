@@ -1,4 +1,5 @@
 import hashlib
+import json
 import tarfile
 import zipfile
 import os
@@ -12,13 +13,16 @@ for line in (root / "SHA256SUMS").read_text().splitlines():
     digest, name = line.split("  ", 1)
     assert hashlib.sha256((root / name).read_bytes()).hexdigest() == digest
 app = next(root.glob("*-linux-x86_64.tar.gz"))
+version = Path("VERSION").read_text().strip()
 with tarfile.open(app) as archive:
     names = archive.getnames()
-    for name in ("app/Helmsman", "app/engines/sing-box", "app/engines/sing-box-awg", "app/engines/zerotier-one", "app/engines/xray", "app/engines/wgcf", "app/_internal/helmsman/warp-obfuscation.json", "app/_internal/helmsman/locales/en.json", "README.en.md", "app/licenses/xray/GO-LICENSE", "app/licenses/wgcf/GO-LICENSE", "install.sh", "uninstall.sh", "decky/dist/index.js"):
+    for name in ("app/Helmsman", "app/engines/sing-box", "app/engines/sing-box-awg", "app/engines/zerotier-one", "app/engines/xray", "app/engines/wgcf", "app/_internal/VERSION", "app/_internal/helmsman/warp-obfuscation.json", "app/_internal/helmsman/locales/en.json", "README.en.md", "app/licenses/xray/GO-LICENSE", "app/licenses/wgcf/GO-LICENSE", "install.sh", "uninstall.sh", "decky/dist/index.js"):
         assert any(x.endswith("/" + name) for x in names), name
     with tempfile.TemporaryDirectory() as d:
         archive.extractall(d, filter="data")
         binary = next(Path(d).glob("*/app/Helmsman"))
+        assert (binary.parent / "_internal/VERSION").read_text().strip() == version
+        assert json.loads((binary.parent.parent / "decky/package.json").read_text())["version"] == version
         subprocess.run([str(binary), "ctl", "--help"], check=True, stdout=subprocess.DEVNULL)
         subprocess.run([str(binary), "--smoke-test"], check=True, timeout=15, env={**os.environ, "QT_QPA_PLATFORM": "offscreen"})
         subprocess.run(["xvfb-run", "-a", "-s", "-screen 0 1280x800x24", str(binary), "--smoke-test"], check=True, timeout=20, env={**os.environ, "QT_QPA_PLATFORM": "xcb"})
@@ -26,4 +30,5 @@ with tarfile.open(app) as archive:
 with zipfile.ZipFile(next(root.glob("helmsman-decky-*.zip"))) as archive:
     for name in ("helmsman/plugin.json", "helmsman/main.py", "helmsman/dist/index.js"):
         assert name in archive.namelist(), name
+    assert json.loads(archive.read("helmsman/package.json"))["version"] == version
 print("PASS installable archives, plugin layout and SHA256SUMS")
