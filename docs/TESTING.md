@@ -176,3 +176,11 @@ python scripts/check-regions.py /path/to/engines
 Проверка реального запуска закреплённого sing-box завершается `initialize network: create netlink socket: operation not permitted`; `/dev/net/tun` отсутствует. User/network namespace не снимает запрет netlink. Поэтому успешная реальная маршрутизация, отсутствие DNS-утечек и обработка NAT ядром здесь **не подтверждены**.
 
 `tests/netns_check.py` и `scripts/test-netns.sh` расширены: IPv6 underlay, UDP/TCP 53 на жёстко заданные IPv4/IPv6 адреса, stub на 127.0.0.53/::1, фактический удалённый MX-запрос без FakeIP, отсутствие запросов к stub при VPN, удаление таблицы при ошибке, восстановление stub после disconnect. Эти сценарии должны пройти в полном ручном GitHub workflow до публикации. Реальный systemd-resolved и Steam Deck, сон, Wi-Fi и внешние серверы всех протоколов остаются аппаратной проверкой.
+
+### Исправление сбоя CI #37
+
+В [запуске 43004465875](https://github.com/ISAIandCO/Helmsman/actions/runs/43004465875) успешно прошли сборка движков/Decky, **116 тестов без пропусков** и GUI. Первое подключение в netns завершилось общим сообщением об ошибке запуска.
+
+Причина воспроизведена на исходниках nftables **1.0.2** из Ubuntu 22.04: `priority dstnat` недопустим для `hook output` в этой версии (`invalid priority expression value in this context`). Офлайн parser/evaluator, с отключёнными обращениями к cache/netlink, отвергает прежний скрипт (exit 1) и принимает тот же скрипт с `priority -100` (exit 0). Совмещённое правило TCP/UDP сохраняется; порядок сетевых hooks не меняется. Это проверка синтаксиса и семантики, а не фактического NAT в ядре.
+
+Сервис теперь сохраняет безопасную исходную ошибку компонента после rollback. Перед подключением netns-тест выполняет `nft --check --file -` в изолированном namespace, чтобы ошибки nft выводились непосредственно в CI. Полный сетевой тест исправленной версии по-прежнему требует нового запуска workflow.

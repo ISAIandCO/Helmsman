@@ -186,7 +186,7 @@ class DNSLifecycleTests(unittest.TestCase):
                  patch('helmsman.system.socket.create_connection'), patch('helmsman.system.subprocess.Popen') as process, \
                  patch.object(runtime, 'install_dns_redirect', side_effect=UserError('fixture nft failure')):
                 process.return_value.poll.return_value = None
-                with self.assertRaises(UserError):
+                with self.assertRaisesRegex(UserError, 'fixture nft failure'):
                     runtime.start(state, profile)
                 self.assertIsNone(runtime.process)
                 self.assertTrue(runtime.guard)
@@ -214,7 +214,7 @@ class DNSLifecycleTests(unittest.TestCase):
     def test_redirect_dual_stack_loop_exclusion_and_owned_cleanup(self):
         script = dns_redirect_script(1234, 4567)
         self.assertIn('table inet helmsman_dns', script)
-        self.assertIn('type nat hook output priority dstnat', script)
+        self.assertIn('type nat hook output priority -100', script)
         self.assertIn('{ tcp, udp } th dport 53 redirect to :4567', script)
         self.assertLess(script.index('skuid 1234 return'), script.index('redirect to'))
         self.assertNotIn('flush ruleset', script)

@@ -43,8 +43,10 @@ def firewall_script(engine_uid, lan):
 def dns_redirect_script(engine_uid, port):
     # OUTPUT also sees loopback/resolved and LAN DNS. The engine's explicit
     # bootstrap/direct DNS must never re-enter its own resolver. inet covers v4/v6.
+    # nftables 1.0.2 accepts the dstnat name only in prerouting; use its numeric
+    # priority for OUTPUT as well (same hook order, compatible with newer nft).
     return ("add table inet helmsman_dns\n"
-            "add chain inet helmsman_dns output { type nat hook output priority dstnat; policy accept; }\n"
+            "add chain inet helmsman_dns output { type nat hook output priority -100; policy accept; }\n"
             f"add rule inet helmsman_dns output meta skuid {int(engine_uid)} return\n"
             f"add rule inet helmsman_dns output meta l4proto {{ tcp, udp }} th dport 53 redirect to :{int(port)}\n")
 
@@ -258,9 +260,12 @@ class Runtime:
                 raise UserError("Не удалось запустить системный движок.")
             if self.tun:
                 self.install_dns_redirect(dns_port)
-        except (OSError, UserError):
+        except OSError:
             self.stop()
             raise UserError("Не удалось запустить системный движок.") from None
+        except UserError:
+            self.stop()
+            raise  # Preserve safe component errors (e.g. nft), after rollback.
         self.profile = p
         self.started = time.monotonic()
         self.last_probe = None

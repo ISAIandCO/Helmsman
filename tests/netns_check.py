@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from helmsman.common import Store, defaults
 from helmsman.importers import parse
 from helmsman.routing import rule
-from helmsman.system import Runtime, receive
+from helmsman.system import Runtime, receive, dns_redirect_script
 from helmsman.daemon import Controller, Server
 from helmsman.rpc import call
 
@@ -135,6 +135,10 @@ def client():
     store = Store(ROOT / "state")
     os.chmod(store.directory, 0o711)
     runtime = Runtime(os.environ["HELMSMAN_ENGINES"], store.directory / "runtime")
+    # Real parser/evaluator, in the disposable namespace, before starting TUN.
+    # --check leaves no table behind and prints useful nft diagnostics on failure.
+    subprocess.run(['nft', '--check', '--file', '-'], input=dns_redirect_script(runtime.uid, 15353), text=True, check=True)
+    print('PASS native nft DNS redirect validation for TCP and UDP', flush=True)
     state = store.data
     p = parse(json.dumps({'proxies': [{'name': 'Clash TUN fixture', 'type': 'vless', 'server': '10.90.0.1', 'port': 19001, 'uuid': UUID}]}))[0]
     p["dns"] = "198.51.100.2"
