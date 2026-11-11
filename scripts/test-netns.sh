@@ -22,11 +22,14 @@ ip -n hm-client link set lo up
 ip -n hm-server link set lo up
 ip -n hm-client addr add 10.90.0.2/24 dev hm-vclient
 ip -n hm-server addr add 10.90.0.1/24 dev hm-vserver
+ip -n hm-client -6 addr add fd90::2/64 dev hm-vclient
+ip -n hm-server -6 addr add fd90::1/64 dev hm-vserver
 ip -n hm-server addr add 198.51.100.2/32 dev lo
 ip -n hm-server addr add 198.51.100.3/32 dev lo
 ip -n hm-client link set hm-vclient up
 ip -n hm-server link set hm-vserver up
 ip -n hm-client route add default via 10.90.0.1
+ip -n hm-client -6 route add default via fd90::1
 mkdir -p /etc/netns/hm-client
 printf 'nameserver 203.0.113.53\noptions timeout:2 attempts:1\n' > /etc/netns/hm-client/resolv.conf
 cd "$root"

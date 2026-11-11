@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from helmsman.common import Store, defaults
 from helmsman.importers import parse
 from helmsman.routing import rule
-from helmsman.system import Runtime
+from helmsman.system import Runtime, receive
 from helmsman.daemon import Controller, Server
 from helmsman.rpc import call
 
@@ -36,8 +36,11 @@ class UDP(socketserver.BaseRequestHandler):
 
 
 class DNS(socketserver.BaseRequestHandler):
-    def handle(self):
-        data, sock = self.request
+    def answer(self, data):
+        self.server.seen = getattr(self.server, 'seen', 0) + 1
+        if getattr(self.server, 'remote', False):
+            with open(ROOT / 'remote-dns-seen', 'a') as output:
+                output.write('query\n')
         end = 12
         while data[end]:
             end += data[end] + 1
@@ -45,13 +48,49 @@ class DNS(socketserver.BaseRequestHandler):
         question = data[12:end]
         is_a = data[end - 4:end - 2] == b"\x00\x01"
         answer = b"\xc0\x0c\x00\x01\x00\x01\x00\x00\x00\x3c\x00\x04" + socket.inet_aton("198.51.100.2") if is_a else b""
-        sock.sendto(data[:2] + b"\x81\x80\x00\x01" + (b"\x00\x01" if is_a else b"\x00\x00") + b"\x00\x00\x00\x00" + question + answer, self.client_address)
+        return data[:2] + b"\x81\x80\x00\x01" + (b"\x00\x01" if is_a else b"\x00\x00") + b"\x00\x00\x00\x00" + question + answer
+
+    def handle(self):
+        data, sock = self.request
+        sock.sendto(self.answer(data), self.client_address)
+
+
+class TCPDNS(DNS):
+    def handle(self):
+        size = int.from_bytes(receive(self.request, 2), 'big')
+        data = self.answer(receive(self.request, size))
+        self.request.sendall(len(data).to_bytes(2, 'big') + data)
+
+
+class UDP6(socketserver.ThreadingUDPServer):
+    address_family = socket.AF_INET6
+
+
+class TCP6(socketserver.ThreadingTCPServer):
+    address_family = socket.AF_INET6
+
+
+def dns_query(host, tcp=False):
+    # MX bypasses FakeIP, proving that an actual remote DNS transaction occurs.
+    query = b'\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x04game\x07example\x00\x00\x0f\x00\x01'
+    family = socket.AF_INET6 if ':' in host else socket.AF_INET
+    with socket.socket(family, socket.SOCK_STREAM if tcp else socket.SOCK_DGRAM) as sock:
+        sock.settimeout(5)
+        if tcp:
+            sock.connect((host, 53))
+            sock.sendall(len(query).to_bytes(2, 'big') + query)
+            response = receive(sock, int.from_bytes(receive(sock, 2), 'big'))
+        else:
+            sock.sendto(query, (host, 53))
+            response = sock.recv(1024)
+        assert response[:2] == query[:2] and response[2] & 0x80 and response[3] & 0xf == 0, response
 
 
 def server():
     ROOT.mkdir(mode=0o711, exist_ok=True)
     os.chmod(ROOT, 0o711)
     servers = [socketserver.ThreadingTCPServer(("0.0.0.0", 19002), TCP), socketserver.ThreadingUDPServer(("0.0.0.0", 19003), UDP), socketserver.ThreadingUDPServer(("0.0.0.0", 53), DNS), socketserver.ThreadingUDPServer(("0.0.0.0", 5353), UDP)]
+    servers[2].remote = True
     for s in servers:
         s.daemon_threads = True
         threading.Thread(target=s.serve_forever, daemon=True).start()
@@ -104,6 +143,13 @@ def client():
     store.save()
     saved_hwid = state["hwid"]
     controller = Controller(store, runtime)
+    # resolved-like loopback stubs must remain untouched while VPN is active.
+    stubs = [socketserver.ThreadingUDPServer(('127.0.0.53', 53), DNS), socketserver.ThreadingTCPServer(('127.0.0.53', 53), TCPDNS),
+             UDP6(('::1', 53), DNS), TCP6(('::1', 53), TCPDNS)]
+    for stub in stubs:
+        stub.seen = 0
+        stub.daemon_threads = True
+        threading.Thread(target=stub.serve_forever, daemon=True).start()
     control_path = str(store.directory / "control.sock")
     rpc_server = Server(control_path, controller, os.getuid())
     rpc_thread = threading.Thread(target=rpc_server.serve_forever, daemon=True)
@@ -131,6 +177,13 @@ def client():
         print("PASS real UDP through VLESS/TUN", flush=True)
         echo("game.example")
         print("PASS DNS interception + FakeIP + remote resolution", flush=True)
+        before_dns = (ROOT / 'remote-dns-seen').read_text().count('query')
+        for host in ('203.0.113.53', '127.0.0.53', '2001:db8::53', '::1'):
+            for tcp in (False, True):
+                dns_query(host, tcp)
+        assert (ROOT / 'remote-dns-seen').read_text().count('query') > before_dns
+        assert all(stub.seen == 0 for stub in stubs)
+        print('PASS UDP/TCP 53 hardcoded IPv4/IPv6 and resolved-like loopback interception, remote DNS and no local-stub leak', flush=True)
         call("settings_save", {"settings": {"lan": True}}, control_path)
         time.sleep(0.3)
         query = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x04game\x07example\x00\x00\x01\x00\x01"
@@ -163,6 +216,8 @@ def client():
         else:
             raise AssertionError("FAIL OPEN: traffic escaped after SIGKILL")
         assert runtime.guard
+        runtime.status()  # Detect crash and remove redirects even while retaining the guard.
+        assert subprocess.run(['nft', 'list', 'table', 'inet', 'helmsman_dns'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0
         print("PASS fail-closed after SIGKILL, including pre-existing direct underlay", flush=True)
         runtime.start(state, p)
         time.sleep(0.8)
@@ -240,6 +295,14 @@ def client():
     assert not (runtime.directory / "active-xray.json").exists()
     assert not Path("/sys/class/net/helmsman0").exists()
     assert subprocess.run(["nft", "list", "table", "inet", "helmsman_guard"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0
+    assert subprocess.run(['nft', 'list', 'table', 'inet', 'helmsman_dns'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode != 0
+    for host in ('127.0.0.53', '::1'):
+        for tcp in (False, True):
+            dns_query(host, tcp)
+    assert all(stub.seen > 0 for stub in stubs)
+    for stub in stubs:
+        stub.shutdown(); stub.server_close()
+    print('PASS normal IPv4/IPv6 system stub DNS restored after disconnect', flush=True)
     assert "31800" not in subprocess.check_output(["ip", "rule", "show"], text=True)
     echo()
     print("PASS disconnect cleanup and normal direct access", flush=True)

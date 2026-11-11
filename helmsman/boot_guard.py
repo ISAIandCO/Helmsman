@@ -10,6 +10,8 @@ def policy(directory):
     try:
         state = json.loads((directory / "state.json").read_text())
         selected = next((p for p in state["profiles"] if p["id"] == state["selected"]), None)
+        if state["selected"] == "vpn-auto":
+            selected = {"kind": "sing-box"}
         desired = boot_intent(state, boot_id())
         if desired and selected is None:
             raise ValueError('missing selected profile')

@@ -20,7 +20,12 @@ DNS_PRESETS = (
 
 def bootstrap_address(value):
     try:
-        return str(ipaddress.ip_address(value))
+        address = ipaddress.ip_address(value)
+        if address.is_loopback or address.is_unspecified:
+            # A stub forwards under another UID; capturing that forwarded query
+            # would feed it back into this bootstrap resolver indefinitely.
+            raise UserError("Начальный DNS: укажите внешний или LAN IP, а не локальный stub, чтобы избежать DNS-петли.")
+        return str(address)
     except (ValueError, TypeError):
         raise UserError("Начальный DNS: укажите IPv4 или IPv6 адрес.") from None
 

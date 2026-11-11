@@ -9,17 +9,42 @@ type Status = {
   profiles: { id: string; name: string; protocol: string }[];
   presets: Record<string, string>; countries: Record<string, string>; preset_descriptions: Record<string, string>;
   active_preset_name: string; active_preset_description: string;
+  fastest?: { regex: string; protocols: string[]; interval_seconds: number; tolerance_ms: number; switch_seconds: number; active_name: string; checking: boolean };
+  fastest_protocols?: string[];
 };
 const rpc = callable<[method: string, params: Record<string, unknown>], unknown>("request");
 type Action = (method: string, params?: Record<string, unknown>) => Promise<void>;
 type T = (text: string) => string;
 const textStyle = { fontSize: 12, lineHeight: 1.4, overflowWrap: "anywhere" as const };
 
+function FastestSettings({ status, busy, action, t }: { status: Status; busy: boolean; action: Action; t: T }) {
+  const group = status.fastest;
+  const [regex, setRegex] = useState(group?.regex ?? "VPN");
+  const [protocols, setProtocols] = useState(group?.protocols ?? []);
+  const [all, setAll] = useState(!group?.protocols.length);
+  const [interval, setIntervalValue] = useState(String(group?.interval_seconds ?? 300));
+  const [tolerance, setTolerance] = useState(String(group?.tolerance_ms ?? 50));
+  const [pause, setPause] = useState(String(group?.switch_seconds ?? 300));
+  return <PanelSection title={t("VPN: самый быстрый")}>
+    <PanelSectionRow><TextField label={t("Regex названия сервера (например, (?i)VPN)")} value={regex} disabled={busy} onChange={e => setRegex(e.target.value)} /></PanelSectionRow>
+    <PanelSectionRow><ToggleField label={t("Все протоколы")} checked={all} disabled={busy} onChange={setAll} /></PanelSectionRow>
+    {!all && (status.fastest_protocols ?? []).map(protocol => <PanelSectionRow key={protocol}><ToggleField label={protocol.toUpperCase()} checked={protocols.includes(protocol)} disabled={busy}
+      onChange={enabled => setProtocols(enabled ? [...protocols, protocol] : protocols.filter(p => p !== protocol))} /></PanelSectionRow>)}
+    <PanelSectionRow><TextField label={t("Полная перепроверка, с")} value={interval} disabled={busy} onChange={e => setIntervalValue(e.target.value)} /></PanelSectionRow>
+    <PanelSectionRow><TextField label={t("Минимальное улучшение задержки, мс")} value={tolerance} disabled={busy} onChange={e => setTolerance(e.target.value)} /></PanelSectionRow>
+    <PanelSectionRow><TextField label={t("Минимум между переключениями, с")} value={pause} disabled={busy} onChange={e => setPause(e.target.value)} /></PanelSectionRow>
+    <PanelSectionRow><ButtonItem layout="below" disabled={busy || (!all && !protocols.length)} onClick={() => action("fastest_save", { regex, protocols: all ? [] : protocols,
+      interval_seconds: Number(interval), tolerance_ms: Number(tolerance), switch_seconds: Number(pause) })}>{t("Сохранить")}</ButtonItem></PanelSectionRow>
+    <PanelSectionRow><ButtonItem layout="below" disabled={busy || !status.desired || status.selected !== "vpn-auto" || group?.checking} onClick={() => action("fastest_check")}>{t("Перепроверить серверы VPN")}</ButtonItem></PanelSectionRow>
+  </PanelSection>;
+}
+
 function Advanced({ status, busy, action, t }: { status?: Status; busy: boolean; action: Action; t: T }) {
   const [warpOpen, setWarpOpen] = useState(false);
   const [warpTerms, setWarpTerms] = useState(false);
   const [warpMode, setWarpMode] = useState("awg");
   const [warpEndpoint, setWarpEndpoint] = useState("");
+  const [fastestOpen, setFastestOpen] = useState(false);
   const selected = status?.profiles.find(p => p.id === status.selected);
   return <>
     <PanelSection title={t("Настройки")}>
@@ -41,6 +66,8 @@ function Advanced({ status, busy, action, t }: { status?: Status; busy: boolean;
         <div style={{ marginTop: 8 }}>{t("Восстановление включённого VPN после сбоя или сна работает независимо от автоподключения.")}</div>
       </div></PanelSectionRow>
     </PanelSection>
+    <PanelSection><PanelSectionRow><ButtonItem layout="below" disabled={!status} onClick={() => setFastestOpen(!fastestOpen)}>{t("VPN: самый быстрый")}</ButtonItem></PanelSectionRow></PanelSection>
+    {fastestOpen && status && <FastestSettings status={status} busy={busy} action={action} t={t} />}
     <PanelSection>
       <PanelSectionRow><ButtonItem layout="below" onClick={() => setWarpOpen(!warpOpen)}>
         {warpOpen ? t("▾ Скрыть Cloudflare WARP") : t("▸ Создать Cloudflare WARP")}
@@ -116,6 +143,7 @@ function Content() {
         {reason && <div role="alert" style={{ color: "#ffad9e", marginTop: 6 }}>{reason}</div>}
         {status?.state === "authorizing" && <div style={{ marginTop: 6 }}>{status.message}</div>}
         {status?.node_id && <div>Node ID: {status.node_id}</div>}
+        {status?.selected === "vpn-auto" && status.fastest?.active_name && <div>{t("Сервер VPN: ")}{status.fastest.active_name}</div>}
         {status?.addresses?.length ? <div>{status.addresses.join(", ")}</div> : null}
         {notice && <div style={{ marginTop: 6 }}>{notice}</div>}
       </div></PanelSectionRow>

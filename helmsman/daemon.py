@@ -10,6 +10,7 @@ import struct
 import threading
 import time
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from .common import MAX_BYTES, PRESETS, SOCKET, Store, UserError, VERSION, atomic_json, identifier, label
@@ -17,7 +18,8 @@ from .dns import bootstrap_address, resolver_url
 from .importers import parse
 from .routing import compile_config, rule, source_list, text_list
 from .subscriptions import download, https_url, update, validate_subscription
-from .system import Runtime, network_signature
+from .system import Runtime, network_signature, probe_connection
+from .fastest import GROUP_ID, PROTOCOLS, candidates, choose, validate as validate_fastest
 from .warp import generate as generate_warp
 from .xray import is_xhttp
 from .subscriptions import fingerprint
@@ -41,6 +43,13 @@ class Controller:
         self.last_tick = wake_clock()
         self.net = ""
         self.last_network_check = 0
+        self.scan_thread = None
+        self.health_thread = None
+        self.scan_epoch = 0
+        self.scan_due = 0
+        self.health_due = 0
+        self.last_switch = 0
+        self.group_results = {}
         for key, (name, url) in BUILTIN_LISTS.items():
             if not any(x["id"] == key for x in self.store.data["lists"]):
                 self.store.data["lists"].append({"id": key, "name": name, "url": url, "format": "srs", "interval_hours": 24})
@@ -55,6 +64,8 @@ class Controller:
 
     def status(self):
         s = self.runtime.status()
+        if self.data["selected"] == GROUP_ID and self.data["desired"] and s["state"] == "disconnected" and self.scan_thread and self.scan_thread.is_alive():
+            s.update(state="connecting", message="VPN: проверка подходящих серверов…")
         if self.last_error:
             s["error"] = self.last_error
         return {**s, "version": VERSION, "selected": self.data["selected"], "desired": self.data["desired"], "auto_connect": self.data['settings']['auto_connect'], "preset": self.data["preset"], "language": self.data['settings']['language'], "country": self.data['settings']['country'],
@@ -62,17 +73,133 @@ class Controller:
                 "preset_descriptions": {key: preset_description(key) for key in available_presets(self.data['settings']['country'])},
                 "active_preset_name": PRESETS[self.data['preset']], "active_preset_description": preset_description(self.data['preset']),
                 "countries": COUNTRIES,
-                "profiles": [{"id": p["id"], "name": p["name"], "protocol": "zerotier" if p["kind"] == "zerotier" else "amneziawg" if p["outbound"].get("amnezia_wg") else p["outbound"]["type"] + ("/xhttp" if is_xhttp(p) else "") + ("/mux" if 'xray_mux' in p['outbound'] else '')} for p in self.data["profiles"]],
+                "fastest": {**self.data["fastest"], "checking": bool(self.scan_thread and self.scan_thread.is_alive()), "results": self.group_results,
+                            "active_name": getattr(self.runtime, "profile", None).get("name", "") if getattr(self.runtime, "profile", None) else ""},
+                "fastest_protocols": list(PROTOCOLS),
+                "profiles": [{"id": p["id"], "name": p["name"], "protocol": "zerotier" if p["kind"] == "zerotier" else "amneziawg" if p["outbound"].get("amnezia_wg") else p["outbound"]["type"] + ("/xhttp" if is_xhttp(p) else "") + ("/mux" if 'xray_mux' in p['outbound'] else '')} for p in self.data["profiles"]] + [{"id": GROUP_ID, "name": "VPN", "protocol": "auto"}],
                 "subscriptions": [{k: s[k] for k in ("id", "name", "last_update", "error") if k in s} for s in self.data["subscriptions"]]}
 
     def selected(self, state=None):
         state = state or self.data
-        p = next((p for p in state["profiles"] if p["id"] == state["selected"]), None)
+        key = state["fastest"]["active"] if state["selected"] == GROUP_ID else state["selected"]
+        p = next((p for p in state["profiles"] if p["id"] == key), None)
         if not p:
             raise UserError("Сначала добавьте и выберите профиль.")
         return p
 
+    def scan_group(self, full=True):
+        thread = self.scan_thread if full else self.health_thread
+        if thread and thread.is_alive():
+            return
+        snapshot = copy.deepcopy(self.data)
+        epoch = self.scan_epoch
+        profiles = candidates(snapshot)
+        active = getattr(self.runtime, "profile", None)
+        active_id = active["id"] if active and active in profiles and self.runtime.status()["state"] == "running" else ""
+        port, password = getattr(self.runtime, "probe_port", 0), getattr(self.runtime, "probe_password", "")
+        if not full:
+            if not active_id:
+                self.health_due = wake_clock() + 30
+                return
+            profiles = [p for p in profiles if p["id"] == active_id]
+
+        def measure(p):
+            if epoch != self.scan_epoch:
+                return {"ok": False}
+            if p["id"] == active_id:
+                return probe_connection(port, password)
+            return self.runtime.measure_profile(snapshot, p)
+
+        def scan():
+            results = {}
+            try:
+                # MemoryMax is shared with the serving engine. Two temporary
+                # clients bound resource use, including Xray and QUIC profiles.
+                with ThreadPoolExecutor(max_workers=2) as pool:
+                    pending = {pool.submit(measure, p): p for p in profiles}
+                    for future in as_completed(pending):
+                        p, result = pending[future], future.result()
+                        results[p["id"]] = result
+                        with self.lock:
+                            if epoch != self.scan_epoch:
+                                continue
+                            # Large subscriptions needn't finish scanning before
+                            # the first working connection can serve traffic.
+                            serving = (getattr(self.runtime, "profile", None) or {}).get("id")
+                            failed = self.group_results.get(serving, {}).get("ok") is False
+                            if full and result.get("ok") and (not serving or failed):
+                                try:
+                                    self.runtime.start(self.data, p)
+                                    self.data["fastest"]["active"] = p["id"]
+                                    self.last_switch = wake_clock()
+                                    self.store.save()
+                                except UserError:
+                                    results[p["id"]] = {"ok": False}
+                with self.lock:
+                    if epoch != self.scan_epoch or not self.data["desired"] or self.data["selected"] != GROUP_ID:
+                        return  # A disconnect, edit or subscription update won the race.
+                    self.group_results = results if full else {**self.group_results, **results}
+                    now = wake_clock()
+                    self.health_due = now + 30
+                    if not full:
+                        serving = (getattr(self.runtime, "profile", None) or {}).get("id")
+                        if serving != active_id or getattr(self.runtime, "probe_port", 0) != port:
+                            return  # The full scan already replaced this connection.
+                        if not results.get(active_id, {}).get("ok"):
+                            self.scan_epoch += 1  # Cancel a long scan; prioritize recovery.
+                            self.scan_due = 0
+                        return
+                    self.scan_due = now + snapshot["fastest"]["interval_seconds"]
+                    serving = (getattr(self.runtime, "profile", None) or {}).get("id", "")
+                    best = choose(results, serving if active_id else "", snapshot["fastest"], now - self.last_switch)
+                    if not best:
+                        self.last_error = "VPN: нет работающих серверов, соответствующих regex и протоколам."
+                        self.scan_due = now + int(self.data["settings"]["reconnect_seconds"])
+                        return
+                    chosen = next(p for p in profiles if p["id"] == best)
+                    if chosen != getattr(self.runtime, "profile", None) or self.runtime.status()["state"] != "running":
+                        self.runtime.start(self.data, chosen)
+                        self.last_switch = now
+                        self.event("VPN: выбран самый быстрый работающий сервер.")
+                    self.data["fastest"]["active"] = best
+                    self.store.save()
+                    self.last_error = ""
+            except Exception:
+                with self.lock:
+                    if epoch == self.scan_epoch:
+                        self.last_error = "VPN: ошибка проверки серверов; сервис повторит попытку."
+                        self.scan_due = wake_clock() + int(self.data["settings"]["reconnect_seconds"])
+
+        thread = threading.Thread(target=scan, daemon=True)
+        if full:
+            self.scan_thread = thread
+        else:
+            self.health_thread = thread
+        thread.start()
+
+    def start_selected(self):
+        if self.data["selected"] == GROUP_ID:
+            if self.data["settings"]["kill_switch"]:
+                self.runtime.install_guard(self.data["settings"]["lan"])
+            self.scan_due = 0
+            self.scan_group()
+        else:
+            self.runtime.start(self.data, self.selected())
+
     def commit(self, candidate, restart=False):
+        group_restart = restart and candidate["selected"] == GROUP_ID
+        active = getattr(self.runtime, "profile", None)
+        if candidate["selected"] == GROUP_ID and active and active["id"] not in {p["id"] for p in candidates(candidate)}:
+            group_restart = True
+        if candidate != self.data:
+            self.scan_epoch += 1
+            self.scan_due = 0
+        if group_restart and self.data["desired"]:
+            self.store.data = candidate
+            self.store.save()
+            self.runtime.stop()
+            self.start_selected()
+            return
         if restart and self.data["desired"]:
             p = self.selected(candidate)
             if p["kind"] == "sing-box":
@@ -152,6 +279,13 @@ class Controller:
                 candidate = copy.deepcopy(self.data)
                 if params.get("profile_id"):
                     candidate["selected"] = params["profile_id"]
+                if candidate["selected"] == GROUP_ID:
+                    if not candidates(candidate):
+                        raise UserError("VPN: нет серверов, соответствующих regex и протоколам.")
+                    candidate["desired"] = True
+                    self.commit(candidate)
+                    self.start_selected()
+                    return self.status()
                 p = self.selected(candidate)
                 # Full validation before persisting intent/guard.
                 if p["kind"] == "sing-box":
@@ -162,6 +296,7 @@ class Controller:
                 self.last_error = ""
                 self.event("Включено выбранное подключение.")
             elif method == "disconnect":
+                self.scan_epoch += 1
                 self.data["desired"] = False
                 self.store.save()
                 self.runtime.stop()
@@ -177,9 +312,19 @@ class Controller:
             elif method == "select":
                 candidate = copy.deepcopy(self.data)
                 candidate["selected"] = params["profile_id"]
-                self.selected(candidate)
+                if candidate["selected"] != GROUP_ID:
+                    self.selected(candidate)
                 self.commit(candidate, restart=True)
                 self.last_error = ""
+            elif method == "fastest_save":
+                candidate = copy.deepcopy(self.data)
+                candidate["fastest"] = validate_fastest(params, candidate["fastest"])
+                self.commit(candidate)
+                self.scan_due = 0
+            elif method == "fastest_check":
+                if self.data["selected"] != GROUP_ID or not self.data["desired"]:
+                    raise UserError("Сначала подключите группу VPN.")
+                self.scan_group()
             elif method == "preset":
                 self.apply_preset(params["preset"])
             elif method == "import":
@@ -228,7 +373,7 @@ class Controller:
                 candidate["profiles"][i] = new
                 self.commit(candidate, restart=candidate["selected"] == new["id"])
             elif method == "profile_delete":
-                if self.data["desired"] and params["id"] == self.data["selected"]:
+                if self.data["desired"] and params["id"] in {self.data["selected"], self.data["fastest"]["active"] if self.data["selected"] == GROUP_ID else ""}:
                     raise UserError("Перед удалением активного профиля отключитесь.")
                 candidate = copy.deepcopy(self.data)
                 candidate["profiles"] = [p for p in candidate["profiles"] if p["id"] != params["id"]]
@@ -355,13 +500,22 @@ class Controller:
                 self.net, self.last_network_check = net, mono
             gap = mono - self.last_tick > 45
             self.last_tick = mono
+            if self.data["desired"] and self.data["selected"] == GROUP_ID and (changed or gap):
+                self.scan_epoch += 1
+                self.scan_due = 0
+                self.runtime.stop()  # Re-test fresh transports after sleep/underlay changes.
             if self.data["desired"] and (current["state"] in {"disconnected", "error"} or changed or gap) and now >= self.retry_at:
                 self.retry_at = now + int(self.data["settings"]["reconnect_seconds"])
                 try:
-                    self.runtime.start(self.data, self.selected())
+                    self.start_selected()
                     self.last_error = ""
                 except UserError as e:
                     self.last_error = str(e)
+            if self.data["desired"] and self.data["selected"] == GROUP_ID:
+                if mono >= self.scan_due:
+                    self.scan_group()
+                if mono >= self.health_due:
+                    self.scan_group(full=False)
             for sub in list(self.data["subscriptions"]):
                 hours = sub["interval_hours"]
                 if hours and now - sub.get("last_attempt", sub.get("last_update", 0)) >= hours * 3600:
@@ -444,6 +598,7 @@ def main():
     store = Store(args.data)
     store.prepare_boot()
     runtime = Runtime(args.binaries, Path(args.data) / "runtime")
+    runtime.stop()  # Remove stale owned DNS redirects/routes after an interrupted shutdown.
     controller = Controller(store, runtime)
     path = Path(args.socket)
     path.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
@@ -471,16 +626,14 @@ def main():
     # Re-arm before exposing an apparently idle service after restart.
     if store.data["desired"]:
         try:
-            p = controller.selected()
-            if p["kind"] == "sing-box" and store.data["settings"]["kill_switch"]:
-                runtime.install_guard(store.data["settings"]["lan"])
-            runtime.start(store.data, p)
+            controller.start_selected()
         except UserError as e:
             controller.last_error = str(e)
     threading.Thread(target=monitor, daemon=True).start()
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
+        controller.scan_epoch += 1
         runtime.stop()
         # Service stop != explicit disconnect. A crash/restart must not fail open.
         if not store.data["desired"]:

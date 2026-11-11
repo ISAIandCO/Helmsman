@@ -56,11 +56,12 @@ def boot_intent(state, current_boot):
         raise ValueError('invalid boot preference')
     if saved_boot == current_boot:
         return bool(state['desired'])
-    return bool(state['settings'].get('auto_connect', False) and any(p['id'] == state['selected'] for p in state['profiles']))
+    return bool(state['settings'].get('auto_connect', False) and (state['selected'] == 'vpn-auto' or any(p['id'] == state['selected'] for p in state['profiles'])))
 
 
 def defaults():
     return {"schema": 1, "hwid": identifier(), "profiles": [], "subscriptions": [],
+            "fastest": {"regex": "VPN", "protocols": [], "interval_seconds": 300, "tolerance_ms": 50, "switch_seconds": 300, "active": ""},
             "selected": "", "desired": False, "preset": "full", "rules": [], "lists": [],
             "settings": {"language": "ru", "country": "ru", "auto_connect": False, "kill_switch": True, "lan": True, "ipv6": True, "mtu": 1400,
                          "default_action": "proxy", "dns_proxy": "https://cloudflare-dns.com/dns-query", "dns_direct": "https://dns.quad9.net/dns-query",
@@ -78,6 +79,7 @@ class Store:
                 self.data = json.loads(self.path.read_text())
                 if self.data["schema"] != 1:
                     raise ValueError("schema")
+                self.data.setdefault("fastest", defaults()["fastest"])
                 for key in defaults():
                     if key not in self.data:
                         raise ValueError(key)

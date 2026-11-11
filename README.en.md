@@ -101,7 +101,7 @@ Use this method to install a specific version or to avoid the automatic shortcut
 
 Open the **[latest release](https://github.com/ISAIandCO/Helmsman/releases/latest)** and download these **Assets**:
 
-- **`helmsman-1.0.0-linux-x86_64.tar.gz`** — the complete installation package;
+- **`helmsman-1.1.0-linux-x86_64.tar.gz`** — the complete installation package;
 - `SHA256SUMS` — checksums to verify your download.
 
 The `source`, `engine-sources`, `runtime-sources` archives and GitHub's standard **Source code** downloads are for developers. The separate `helmsman-decky-…zip` is already included in the full package; you do not need to install it separately.
@@ -110,8 +110,8 @@ In Dolphin, open the folder containing the downloads, right-click empty space an
 
 ```bash
 sha256sum --ignore-missing -c SHA256SUMS
-tar -xzf helmsman-1.0.0-linux-x86_64.tar.gz
-cd helmsman-1.0.0
+tar -xzf helmsman-1.1.0-linux-x86_64.tar.gz
+cd helmsman-1.1.0
 ```
 
 The downloaded archive should be marked **OK**. Download it again if verification fails.
@@ -178,6 +178,20 @@ Open **Profiles → Add**. Paste a link or configuration, or press **Open file�
 The check contacts Steam Store with TLS verification. **VPN enabled** means the engine and system tunnel are running; the check result shows whether internet access through the profile works. It does not measure ping or test every UDP game.
 
 You can now close the window and return to Game Mode. Press **Disconnect** in either interface to restore regular internet access.
+
+## VPN group: the fastest server
+
+The **VPN** virtual profile is available in Desktop and Decky. It matches server names against the `VPN` regex across imported profiles and subscriptions. Select it and connect: the service checks HTTPS Steam Store through real VPN clients and selects the working server with the lowest measured latency. An open server port alone does not qualify. ZeroTier is a separate virtual LAN and is excluded.
+
+Open **Profiles → VPN: fastest server** in Desktop or **Advanced → VPN: fastest server** in Decky to change:
+
+- The name regex, for example `(?i)VPN` for case-insensitive matching.
+- All protocols or several selected protocols, including VLESS, Hysteria2, Trojan, WireGuard, AmneziaWG and OpenVPN.
+- Full recheck interval (**300 s**), latency improvement threshold (**50 ms**) and minimum time between switches (**300 s**) by default.
+
+The current server is checked every **30 s**, independently of full scans. Failure bypasses the switch pause. Large groups take longer to scan; the first working connection starts before the scan finishes. At most two temporary clients run and they do not change the serving connection's TUN, routes or DNS interception. The check covers TCP/TLS/DNS and cannot guarantee every UDP game. Switching restarts the tunnel and may interrupt game sessions.
+
+Filters, the selected virtual profile and last server persist; availability is checked again after restart. Subscription updates refresh group membership automatically. The actual server name appears alongside status. Existing routing and DNS settings apply to the physical profile, including its DNS override.
 
 ## Subscriptions with HWID
 
@@ -280,6 +294,10 @@ Custom servers support **DoH** (`https://dns.example/dns-query`) and **DoT** (`t
 **Network and recovery options** contains **Bootstrap DNS (UDP, IP)**, defaulting to `9.9.9.9`. It directly resolves VPN and DNS server names without encryption before the connection is established. With LAN enabled, local `.lan`, `.local`, `.home.arpa` queries also go there; you can use your router's IP for home names. DNS inside a WG/AWG profile takes priority over the general VPN DNS setting; remove it through **Profiles → Edit** if necessary.
 
 **LAN access and Remote Play** is enabled by default: home addresses and device discovery remain direct. Turning it off makes them follow the other rules. IPv6 has a separate toggle; when off, IPv6 traffic is blocked. Helmsman does not change system DNS in ZeroTier mode.
+
+While an internet VPN is active, ordinary **UDP/TCP 53** requests are intercepted automatically: IPv4/IPv6, hardcoded resolvers and systemd-resolved loopback requests. They enter sing-box's existing DNS policy, including **DNS through VPN**, DoH/DoT, profile DNS and direct/local domain exceptions. The engine's own DNS is excluded to avoid loops; mDNS/LLMNR ports are unaffected. ZeroTier leaves system DNS unchanged.
+
+The separate `inet helmsman_dns` table is removed on disconnect, service stop and detected engine failure, and cleaned after an interrupted restart or uninstall. NetworkManager, systemd-resolved and `/etc/resolv.conf` are not rewritten. Bootstrap DNS requires an external or LAN IP; loopback stubs such as `127.0.0.53` are rejected before connection to prevent a loop through the stub's forwarded requests. When crash protection is enabled, engine failure or service stop deliberately retains the existing kill switch until an explicit **Disconnect**; this is intentional protection, not a stale DNS redirect.
 
 ## Game Mode and Decky Loader
 

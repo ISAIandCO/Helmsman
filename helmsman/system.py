@@ -9,10 +9,11 @@ import socket
 import ssl
 import subprocess
 import time
+import tempfile
 from pathlib import Path
 
 from .common import UserError, atomic_json
-from .routing import compile_config
+from .routing import compile_config, dns_inbounds
 from .xray import compile_xray, uses_xray, socks_outbound
 
 
@@ -39,6 +40,15 @@ def firewall_script(engine_uid, lan):
     return "add table inet helmsman_guard\nadd chain inet helmsman_guard output { type filter hook output priority 10; policy accept; }\n" + "\n".join("add rule inet helmsman_guard output " + r for r in rules) + "\n"
 
 
+def dns_redirect_script(engine_uid, port):
+    # OUTPUT also sees loopback/resolved and LAN DNS. The engine's explicit
+    # bootstrap/direct DNS must never re-enter its own resolver. inet covers v4/v6.
+    return ("add table inet helmsman_dns\n"
+            "add chain inet helmsman_dns output { type nat hook output priority dstnat; policy accept; }\n"
+            f"add rule inet helmsman_dns output meta skuid {int(engine_uid)} return\n"
+            f"add rule inet helmsman_dns output meta l4proto {{ tcp, udp }} th dport 53 redirect to :{int(port)}\n")
+
+
 class Runtime:
     def __init__(self, binaries, directory, engine_uid=None):
         self.binaries = Path(binaries)
@@ -55,6 +65,7 @@ class Runtime:
         self.probe_port = 0
         self.probe_password = ""
         self.last_probe = None
+        self.tun = True
         self.zt_home = self.directory.parent / "zerotier"
 
     def binary(self, p):
@@ -119,6 +130,14 @@ class Runtime:
             run(["ip", family, "route", "flush", "table", "31800"], check=False)
         run(["ip", "link", "del", "helmsman0"], check=False)
 
+    def clear_dns_redirect(self):
+        if run(["nft", "list", "table", "inet", "helmsman_dns"], check=False).returncode == 0:
+            run(["nft", "delete", "table", "inet", "helmsman_dns"])
+
+    def install_dns_redirect(self, port):
+        self.clear_dns_redirect()
+        run(["nft", "-f", "-"], input=dns_redirect_script(self.uid, port))
+
     def stop_process(self, process):
         if not process:
             return
@@ -132,6 +151,8 @@ class Runtime:
 
     def stop(self):
         # Stop the TUN client before its XHTTP transport. Guard remains armed.
+        if self.tun:
+            self.clear_dns_redirect()
         self.stop_process(self.process)
         self.process = None
         self.stop_process(self.xray_process)
@@ -144,7 +165,8 @@ class Runtime:
             for f in networks.glob("*"):
                 if f.is_file():
                     f.unlink()
-        self.cleanup_routes()
+        if self.tun:
+            self.cleanup_routes()
         self.profile = None
 
     def signal_child(self, sig, process=None):
@@ -170,7 +192,13 @@ class Runtime:
             with socket.socket() as reservation:
                 reservation.bind(("127.0.0.1", 0))
                 xray_proxy = (reservation.getsockname()[1], secrets.token_hex(24))
-        config = compile_config(state, p, self.directory, self.uid, xray_proxy=xray_proxy)
+        config = compile_config(state, p, self.directory, self.uid, tun=self.tun, xray_proxy=xray_proxy)
+        dns_port = 0
+        if self.tun:
+            with socket.socket() as reservation:
+                reservation.bind(("127.0.0.1", 0))
+                dns_port = reservation.getsockname()[1]
+            dns_inbounds(config, dns_port, state["settings"]["ipv6"])
         with socket.socket() as reservation:
             reservation.bind(("127.0.0.1", 0))
             self.probe_port = reservation.getsockname()[1]
@@ -181,10 +209,10 @@ class Runtime:
             {"inbound": ["health"], "outbound": "proxy"},
         ]
         self.check(config, p)  # Validate before disturbing the previous engine.
-        if state["settings"]["kill_switch"]:
+        if self.tun and state["settings"]["kill_switch"]:
             self.install_guard(state["settings"]["lan"])
         self.stop()
-        if not state["settings"]["kill_switch"]:
+        if self.tun and not state["settings"]["kill_switch"]:
             self.clear_guard()
         config_path = self.directory / "active.json"
         atomic_json(config_path, config)
@@ -212,10 +240,25 @@ class Runtime:
             except (OSError, UserError):
                 self.stop()
                 raise UserError("Не удалось запустить Xray. Проверьте установку и профиль.") from None
-        args = ["setpriv", "--reuid", str(self.uid), "--regid", str(self.gid), "--clear-groups", "--no-new-privs", "--inh-caps", "+net_admin,+net_raw", "--ambient-caps", "+net_admin,+net_raw", str(self.binary(p)), "run", "-c", str(config_path)]
+        caps = "+net_admin,+net_raw" if self.tun else "-all"
+        args = ["setpriv", "--reuid", str(self.uid), "--regid", str(self.gid), "--clear-groups", "--no-new-privs", "--inh-caps", caps, "--ambient-caps", caps, str(self.binary(p)), "run", "-c", str(config_path)]
         try:
             self.process = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "HOME": str(self.directory), "LANG": "C.UTF-8"})
-        except OSError:
+            # Install only for a live listener. Any error rolls back the owned
+            # redirect table; the pre-existing crash guard remains intentional.
+            for _ in range(100):
+                if self.process.poll() is not None:
+                    raise UserError("Не удалось запустить системный движок.")
+                try:
+                    with socket.create_connection(("127.0.0.1", self.probe_port), timeout=0.05):
+                        break
+                except OSError:
+                    time.sleep(0.05)
+            else:
+                raise UserError("Не удалось запустить системный движок.")
+            if self.tun:
+                self.install_dns_redirect(dns_port)
+        except (OSError, UserError):
             self.stop()
             raise UserError("Не удалось запустить системный движок.") from None
         self.profile = p
@@ -248,6 +291,8 @@ class Runtime:
         if not self.process:
             return {"state": "disconnected", "message": "Отключено", "guard": self.guard}
         if self.process.poll() is not None:
+            if self.tun:
+                self.clear_dns_redirect()
             return {"state": "error", "message": f"Сетевой движок завершился (код {self.process.returncode}). Проверьте профиль и доступность TUN.", "guard": self.guard}
         if self.xray_process and self.xray_process.poll() is not None:
             # A live TUN client could otherwise continue serving direct rules
@@ -272,18 +317,22 @@ class Runtime:
     def probe(self):
         if not self.process or self.process.poll() is not None or not self.profile or self.profile["kind"] != "sing-box":
             raise UserError("Проверка доступна при включённом VPN-профиле.")
-        start = time.monotonic()
-        try:
-            sock = socks_connect(self.probe_port, "health", self.probe_password, "store.steampowered.com", 443)
-            with ssl.create_default_context().wrap_socket(sock, server_hostname="store.steampowered.com") as tls:
-                tls.sendall(b"HEAD / HTTP/1.1\r\nHost: store.steampowered.com\r\nConnection: close\r\n\r\n")
-                response = tls.recv(64)
-                if not response.startswith(b"HTTP/"):
-                    raise OSError()
-            self.last_probe = {"ok": True, "time": time.time(), "duration_ms": int((time.monotonic() - start) * 1000), "message": "Steam Store доступен через выбранное подключение (DNS, TCP и TLS)."}
-        except (OSError, UserError):
-            self.last_probe = {"ok": False, "time": time.time(), "message": "Не удалось открыть Steam Store через профиль. Проверьте ключи, сервер, DNS и ограничения сети."}
+        self.last_probe = probe_connection(self.probe_port, self.probe_password)
         return self.last_probe
+
+    def measure_profile(self, state, profile):
+        # Same engines, DNS and authenticated HTTPS probe, but no TUN, guard or
+        # host routes. Separate files/ports let a small batch run concurrently.
+        with tempfile.TemporaryDirectory(prefix="test-", dir=self.directory) as directory:
+            trial = Runtime(self.binaries, directory, engine_uid=self.uid)
+            trial.tun = False
+            try:
+                trial.start(state, profile)
+                return trial.probe()
+            except UserError:
+                return {"ok": False}
+            finally:
+                trial.stop()
 
     def decompile_list(self, data, target):
         path = self.directory / "list.srs"
@@ -292,6 +341,20 @@ class Runtime:
             run([self.binaries / "sing-box", "rule-set", "decompile", path, "-o", target])
         finally:
             path.unlink(missing_ok=True)
+
+
+def probe_connection(port, password):
+    start = time.monotonic()
+    try:
+        sock = socks_connect(port, "health", password, "store.steampowered.com", 443)
+        with ssl.create_default_context().wrap_socket(sock, server_hostname="store.steampowered.com") as tls:
+            tls.sendall(b"HEAD / HTTP/1.1\r\nHost: store.steampowered.com\r\nConnection: close\r\n\r\n")
+            response = tls.recv(64)
+            if not response.startswith(b"HTTP/"):
+                raise OSError()
+        return {"ok": True, "time": time.time(), "duration_ms": int((time.monotonic() - start) * 1000), "message": "Steam Store доступен через выбранное подключение (DNS, TCP и TLS)."}
+    except (OSError, UserError):
+        return {"ok": False, "time": time.time(), "message": "Не удалось открыть Steam Store через профиль. Проверьте ключи, сервер, DNS и ограничения сети."}
 
 
 def network_signature():

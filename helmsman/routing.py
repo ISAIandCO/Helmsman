@@ -13,6 +13,16 @@ RULE_TYPES = {"domain", "domain_suffix", "ip_cidr", "list", "process_name", "pro
 LIST_FIELDS = {"domain", "domain_suffix", "domain_regex", "ip_cidr"}
 
 
+def dns_inbounds(config, port, ipv6):
+    """Loopback listeners for the owned OUTPUT redirect, sharing core DNS policy."""
+    tags = []
+    for address in (["127.0.0.1", "::1"] if ipv6 else ["127.0.0.1"]):
+        tag = "dns-" + address
+        tags.append(tag)
+        config["inbounds"].append({"type": "direct", "tag": tag, "listen": address, "listen_port": port})
+    config["route"]["rules"].insert(0, {"inbound": tags, "action": "hijack-dns"})
+
+
 def rule(raw):
     kind = raw.get("type", "domain_suffix")
     action = raw.get("action", "proxy")

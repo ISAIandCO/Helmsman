@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QFrame, QC
 from .i18n import tr, set_language, language, translate_message
 from .regions import COUNTRIES, PRESETS, BUILTIN_LISTS, available_presets, preset_description
 from .common import MAX_BYTES, UserError, VERSION
+from .fastest import GROUP_ID, PROTOCOLS
 from .dns import DNS_PRESETS, resolver_url
 from .rpc import call
 from .subscriptions import SUBSCRIPTION_AGENT, subscription_agent
@@ -344,7 +345,7 @@ class Window(QMainWindow):
         button(tr('Проверить подключение'), lambda: self.request('probe', callback=lambda r: QMessageBox.information(self, tr('Проверка'), r['message'])), body, 'text', 'diagnostics')
         body.addStretch()
         row.addWidget(hero, 3)
-        right = QVBoxLayout(); right.setSpacing(12)
+        right = QVBoxLayout(); right.setSpacing(4)
         _, route = card(right, 'compactCard')
         route.addWidget(label(tr('Маршрут трафика'), 'cardTitle'))
         self.preset_picker = combo(available_presets('ru'))
@@ -400,6 +401,8 @@ class Window(QMainWindow):
         if s.get('node_id'): details.append('Node ID: ' + s['node_id'])
         if s.get('addresses'): details.append(', '.join(s['addresses']))
         if s.get('last_probe'): details.append(s['last_probe']['message'])
+        if s['selected'] == GROUP_ID and s.get('fastest', {}).get('active_name'):
+            details.append(tr('Сервер VPN: ') + s['fastest']['active_name'])
         self.state_label.setText('\n'.join(x for x in details if x))
         active = bool(s.get('guard'))
         self.guard_badge.setText(tr('Защита включена') if active else tr('Защита выключена'))
@@ -414,13 +417,14 @@ class Window(QMainWindow):
         self.apply_preset_button.setEnabled(chosen.get('protocol') != 'zerotier' and self.preset_picker.currentData() in available_presets(self.config['settings']['country']) if self.config else False)
         if self.profile_picker.currentData() != s['selected']:
             self.profile_picker.setCurrentIndex(self.profile_picker.findData(s['selected']))
-        if self.config and (s.get('language', 'ru') != language() or s.get('country', 'ru') != self.config['settings'].get('country', 'ru') or s['preset'] != self.config['preset']):
+        if self.config and (s.get('language', 'ru') != language() or s.get('country', 'ru') != self.config['settings'].get('country', 'ru') or s['preset'] != self.config['preset'] or (s['selected'] == GROUP_ID and s.get('fastest', {}).get('active') != self.config['fastest']['active'])):
             self.request('configuration', callback=self.loaded, quiet=True)
 
     def build_profiles(self):
         l = self.page(tr('Профили'))
         row = QHBoxLayout()
         button(tr('Добавить'), self.import_profiles, row, 'primary', 'plus')
+        button(tr('VPN: самый быстрый'), self.edit_fastest, row, '', 'settings')
         row.addStretch()
         button(tr('Изменить'), self.edit_profile, row, '', 'edit')
         button(tr('Удалить'), lambda: self.delete_selected('profile_delete', self.profiles), row, 'danger', 'delete')
@@ -434,6 +438,39 @@ class Window(QMainWindow):
         button('Cloudflare WARP', self.generate_warp, actions, '', 'warp')
         button(tr('Сеть ZeroTier'), self.add_zerotier, actions, '', 'network')
         shortcuts.addLayout(actions)
+
+    def edit_fastest(self):
+        if not self.config:
+            return
+        group = self.config['fastest']
+        regex = line(group['regex'])
+        all_protocols = QCheckBox(tr('Все протоколы'))
+        all_protocols.setChecked(not group['protocols'])
+        protocols = QListWidget()
+        protocols.setMinimumHeight(200)
+        for protocol in PROTOCOLS:
+            item = QListWidgetItem(protocol.upper())
+            item.setData(Qt.UserRole, protocol)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked if protocol in group['protocols'] else Qt.Unchecked)
+            protocols.addItem(item)
+        protocols.setEnabled(not all_protocols.isChecked())
+        all_protocols.toggled.connect(lambda checked: protocols.setEnabled(not checked))
+        interval = integer(group['interval_seconds'], 60, 3600)
+        tolerance = integer(group['tolerance_ms'], 0, 2000)
+        pause = integer(group['switch_seconds'], 60, 3600)
+        fields = {'regex': (tr('Regex названия сервера (например, (?i)VPN)'), regex),
+                  'all': ('', all_protocols), 'protocols': (tr('Протоколы группы VPN'), protocols),
+                  'interval': (tr('Полная перепроверка, с'), interval),
+                  'tolerance': (tr('Минимальное улучшение задержки, мс'), tolerance),
+                  'pause': (tr('Минимум между переключениями, с'), pause)}
+        dialog = Form(tr('VPN: самый быстрый'), fields, self)
+        if dialog.exec():
+            selected = [] if all_protocols.isChecked() else [protocols.item(i).data(Qt.UserRole) for i in range(protocols.count()) if protocols.item(i).checkState() == Qt.Checked]
+            if not all_protocols.isChecked() and not selected:
+                QMessageBox.warning(self, 'VPN', tr('Выберите протоколы или включите все.'))
+                return
+            self.mutate('fastest_save', {'regex': regex.text(), 'protocols': selected, 'interval_seconds': interval.value(), 'tolerance_ms': tolerance.value(), 'switch_seconds': pause.value()})
 
     def selected_item(self, widget, kind):
         i = widget.currentRow()
@@ -715,6 +752,7 @@ class Window(QMainWindow):
             dns_row.addWidget(frame, 1)
         l.addLayout(dns_row)
         l.addWidget(label(tr('Можно выбрать готовый сервер или ввести свой адрес. DNS из профиля WG/AWG имеет приоритет для запросов через VPN. При ошибке DoH/DoT перехода на обычный DNS нет.'), 'caption'))
+        l.addWidget(label(tr('При VPN запросы UDP/TCP 53, включая системный и локальный DNS, перехватываются автоматически. Правила прямого DNS и локальных доменов сохраняются.'), 'caption'))
         advanced = disclosure(tr('Параметры сети и восстановления'), l)
         form = QFormLayout(); form.setVerticalSpacing(12)
         form.setRowWrapPolicy(QFormLayout.WrapLongRows)
@@ -773,6 +811,7 @@ class Window(QMainWindow):
             self.profile_picker.addItem(p["name"] + " · " + t, p["id"])
         self.profiles.setVisible(bool(config['profiles']))
         self.profiles_empty.setVisible(not config['profiles'])
+        self.profile_picker.addItem(tr('VPN · самый быстрый'), GROUP_ID)
         self.profile_picker.setCurrentIndex(self.profile_picker.findData(config["selected"]))
         country = config['settings'].get('country', 'ru')
         self.language_picker.setCurrentIndex(self.language_picker.findData(target_language))
@@ -804,7 +843,8 @@ class Window(QMainWindow):
         self.library_summary.setText(tr(f"Подключений: {len(config['profiles'])}"))
         self.lan_summary.setText(tr('Локальная сеть доступна напрямую') if config['settings']['lan'] else tr('Локальная сеть подчиняется правилам'))
         settings = config['settings']
-        chosen = next((p for p in config['profiles'] if p['id'] == config['selected']), {})
+        physical_id = config['fastest']['active'] if config['selected'] == GROUP_ID else config['selected']
+        chosen = next((p for p in config['profiles'] if p['id'] == physical_id), {})
         self.dns_summary.setText(tr('Через VPN: ') + (chosen.get('dns') or urlsplit(resolver_url(settings['dns_proxy'])).hostname or '') + tr('\nНапрямую: ') + (urlsplit(resolver_url(settings['dns_direct'])).hostname or ''))
         for key, w in self.setting_widgets.items():
             value = config["settings"][key]

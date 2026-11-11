@@ -187,7 +187,8 @@ def update(state, sub_id, validate_profiles, fetch=download):
         p["subscription"] = sub_id
         added.append(p)
     keep = [p for p in result["profiles"] if p.get("subscription") != sub_id]
-    selected = next((p for p in result["profiles"] if p["id"] == result["selected"]), None)
+    active_id = result.get("fastest", {}).get("active", "") if result["selected"] == "vpn-auto" else result["selected"]
+    selected = next((p for p in result["profiles"] if p["id"] == active_id), None)
     if selected and selected.get("subscription") == sub_id and selected["id"] not in {p["id"] for p in added}:
         selected.pop("subscription", None)
         selected["name"] = label(selected["name"][:130] + " (сохранённый)")

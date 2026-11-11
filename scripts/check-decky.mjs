@@ -20,6 +20,8 @@ const { translator } = compile('../decky/src/i18n.ts', { '../../helmsman/locales
 assert.equal(translator('en')('Ошибка системного компонента: sing-box (код 1).'), 'System component error: sing-box (code 1).');
 let service = { state: 'disconnected', message: '', desired: false, guard: false, auto_connect: false,
   selected: 'p', preset: 'ru-selective', country: 'ru', language: 'ru',
+  fastest: { regex: 'VPN', protocols: [], interval_seconds: 300, tolerance_ms: 50, switch_seconds: 300, active_name: '', checking: false },
+  fastest_protocols: ['vless', 'hysteria2', 'amneziawg'],
   profiles: [{ id: 'p', name: 'Ошибка', protocol: 'vless' }] };
 const calls = [], frames = new Map(), effects = [], memory = new Map();
 let frame, changed = false;
@@ -50,6 +52,7 @@ const api = { definePlugin: callback => callback(), callable: () => async (metho
   calls.push([method, params]);
   if (method === 'preferences') service = { ...service, ...params };
   if (method === 'preset') service.preset = params.preset;
+  if (method === 'fastest_save') service.fastest = { ...service.fastest, ...params };
   return status();
 } };
 const plugin = compile('../decky/src/index.tsx', {
@@ -96,6 +99,14 @@ assert.ok(find('DropdownItem', 'Route').props.rgOptions.some(option => option.la
 assert.equal(find('DropdownItem', 'Profile').props.rgOptions[0].label, 'Ошибка');
 find('ButtonItem', '▸ Create Cloudflare WARP').props.onClick(); await render();
 assert.ok(find('ToggleField', 'I accept the Cloudflare terms'));
+find('ButtonItem', 'VPN: fastest server').props.onClick(); await render();
+find('TextField', 'Server name regex (for example, (?i)VPN)').props.onChange({ target: { value: '(?i)VPN' } }); await render();
+find('ToggleField', 'All protocols').props.onChange(false); await render();
+find('ToggleField', 'VLESS').props.onChange(true); await render();
+find('ToggleField', 'HYSTERIA2').props.onChange(true); await render();
+find('ButtonItem', 'Save').props.onClick(); await render();
+assert.equal(service.fastest.regex, '(?i)VPN');
+assert.deepEqual(Array.from(service.fastest.protocols), ['vless', 'hysteria2']);
 for (const node of nodes) {
   if (node.text) assert.ok(!/[А-Яа-яЁё]/.test(node.text), node.text);
   if (node.type === 'div' && node.props.style?.fontSize === 12) assert.equal(node.props.style.overflowWrap, 'anywhere');

@@ -109,6 +109,27 @@ def warp_dialog(dialog):
     dialog.reject()  # No external registration in CI.
 modal(w.generate_warp, warp_dialog)
 print('PASS WARP native dialog and explicit consent')
+def fastest_dialog(dialog):
+    fields = dialog.fields
+    fields['regex'][1].setText('(?i)VPN')
+    fields['all'][1].setChecked(False)
+    view = fields['protocols'][1]
+    from PySide6.QtCore import Qt
+    view.item(0).setCheckState(Qt.Checked)
+    view.item(1).setCheckState(Qt.Checked)
+    dialog.grab().save(str(out / 'desktop-fastest.png'))
+    dialog.accept()
+modal(w.edit_fastest, fastest_dialog)
+assert saved_requests[-1] == ('fastest_save', {'regex': '(?i)VPN', 'protocols': ['vless', 'hysteria2'], 'interval_seconds': 300, 'tolerance_ms': 50, 'switch_seconds': 300})
+assert w.profile_picker.findData('vpn-auto') >= 0
+group_fixture = copy.deepcopy(fixture)
+group_fixture['selected'] = 'vpn-auto'
+group_fixture['fastest']['active'] = fixture['profiles'][0]['id']
+group_fixture['profiles'][0]['dns'] = '1.1.1.1'
+w.loaded(group_fixture)
+assert '1.1.1.1' in w.dns_summary.text() and w.profile_picker.currentData() == 'vpn-auto'
+w.loaded(fixture)
+print('PASS virtual VPN selection and regex/multiple-protocol settings dialog')
 saved_requests.clear()
 def subscription_dialog(dialog):
     fields = dialog.fields
